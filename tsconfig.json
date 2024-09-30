@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES6",
+    "module": "commonjs",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "outDir": "./dist"  // Ensure this line is present
+  },
+  "include": ["src/**/*", "testbot.ts", "server.js"],
+  "exclude": ["node_modules", "**/*.spec.ts"]
+}
