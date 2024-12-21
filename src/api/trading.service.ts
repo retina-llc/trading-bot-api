@@ -1,13 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import axios from 'axios';
 import * as crypto from 'crypto';
 import * as ccxt from 'ccxt';
-import dotenv from 'dotenv';
 import logger from './logger';
-import { getLogger } from './logger'; 
 import { getTopTrendingCoinsForTheDay } from './gainer';
-dotenv.config();
-
+import { UserRepository } from './user/user-repository';
 
 const BITMART_API_URL = 'https://api-cloud.bitmart.com';
 
@@ -20,88 +17,134 @@ export class TradingService {
   private startDayTimestamp: number = 0;
   private skyrocketProfitMode: boolean = false;
   private skyrocketProfitTarget: number = 0;
-  private exchange: ccxt.bitmart;
-  private monitoringExchange: ccxt.bitmart; 
-  constructor() {
-    this.exchange = new ccxt.bitmart({
-      apiKey: process.env.BITMART_API_KEY,
-      secret: process.env.BITMART_API_SECRET,
-      uid: process.env.BITMART_API_MEMO,
-    });
 
-    this.monitoringExchange = new ccxt.bitmart({
-      apiKey: process.env.MONITORING_API_KEY,
-      secret: process.env.MONITORING_API_SECRET,
-      uid: 'Monitoring',
-    });
-  }
+  constructor(private readonly userRepository: UserRepository) {}
 
-  private generateSignature(httpMethod: string, url: string, timestamp: string, queryString: string, body: any, secretKey: string, memo: string): string {
-    const bodyString = body && Object.keys(body).length > 0 ? JSON.stringify(body) : '';
-    const preHashString = `${timestamp}#${memo}#${httpMethod}#${url}${queryString ? '?' + queryString : ''}${bodyString}`;
+  // Load user API keys dynamically
+  private async getUserApiKeys(userId: number): Promise<{
+    bitmartApiKey: string;
+    bitmartApiSecret: string;
+    bitmartApiMemo: string;
+    monitoringApiKey: string;
+    monitoringApiSecret: string;
+    monitoringApiMemo: string;
+  }> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user || !user.apiKeys) {
+      throw new UnauthorizedException('API keys not found for this user');
+    }
+    const {
+      bitmartApiKey,
+      bitmartApiSecret,
+      bitmartApiMemo,
+      monitoringApiKey,
+      monitoringApiSecret,
+      monitoringApiMemo,
+    } = user.apiKeys;
 
-    console.log('Generating signature with the following parameters:');
-    console.log('Timestamp:', timestamp);
-    console.log('Memo:', memo);
-    console.log('HTTP Method:', httpMethod);
-    console.log('URL:', url);
-    console.log('Query String:', queryString);
-    console.log('Body:', bodyString);
-    console.log('Pre-hash String:', preHashString);
+    if (
+      !bitmartApiKey ||
+      !bitmartApiSecret ||
+      !bitmartApiMemo ||
+      !monitoringApiKey ||
+      !monitoringApiSecret ||
+      !monitoringApiMemo
+    ) {
+      throw new UnauthorizedException('Incomplete API keys for this user');
+    }
 
-    const signature = crypto.createHmac('sha256', secretKey).update(preHashString).digest('hex');
-    console.log('Generated Signature:', signature);
-    return signature;
-  }
-  private async getMonitoringAuthHeaders(endpoint: string, method: string, queryString: string, body: any): Promise<any> {
-    const apiKey = process.env.MONITORING_API_KEY!;
-    const apiSecret = process.env.MONITORING_API_SECRET!;
-    const memo = 'Monitoring';
-    const timestamp = Date.now().toString();
-  
-    console.log('Monitoring Auth Headers:');
-    console.log('API Key:', apiKey);
-    console.log('Memo:', memo);
-    console.log('Timestamp:', timestamp);
-  
-    const urlPath = endpoint.replace(BITMART_API_URL, '');
-    console.log('URL Path:', urlPath);
-  
-    const signature = this.generateSignature(method, urlPath, timestamp, queryString, body, apiSecret, memo);
-    console.log('Signature:', signature);
-  
     return {
-      'X-BM-KEY': apiKey,
-      'X-BM-SIGN': signature,
-      'X-BM-TIMESTAMP': timestamp,
-      'X-BM-MEMO': memo,
-      'Content-Type': 'application/json'
+      bitmartApiKey,
+      bitmartApiSecret,
+      bitmartApiMemo,
+      monitoringApiKey,
+      monitoringApiSecret,
+      monitoringApiMemo,
     };
   }
-  
-  private async getAuthHeaders(endpoint: string, method: string, queryString: string, body: any): Promise<any> {
-    const apiKey = process.env.BITMART_API_KEY!;
-    const apiSecret = process.env.BITMART_API_SECRET!;
-    const apiMemo = process.env.BITMART_API_MEMO!;
+
+  // Dynamically initialize the CCXT exchanges
+  private async initializeExchanges(userId: number): Promise<{
+    exchange: ccxt.bitmart;
+    monitoringExchange: ccxt.bitmart;
+  }> {
+    const {
+      bitmartApiKey,
+      bitmartApiSecret,
+      bitmartApiMemo,
+      monitoringApiKey,
+      monitoringApiSecret,
+      monitoringApiMemo,
+    } = await this.getUserApiKeys(userId);
+
+    const exchange = new ccxt.bitmart({
+      apiKey: bitmartApiKey,
+      secret: bitmartApiSecret,
+      uid: bitmartApiMemo,
+    });
+
+    const monitoringExchange = new ccxt.bitmart({
+      apiKey: monitoringApiKey,
+      secret: monitoringApiSecret,
+      uid: monitoringApiMemo,
+    });
+
+    return { exchange, monitoringExchange };
+  }
+
+  private generateSignature(
+    httpMethod: string,
+    url: string,
+    timestamp: string,
+    queryString: string,
+    body: any,
+    secretKey: string,
+    memo: string
+  ): string {
+    const bodyString = body && Object.keys(body).length > 0 ? JSON.stringify(body) : '';
+    const preHashString = `${timestamp}#${memo}#${httpMethod}#${url}${queryString ? '?' + queryString : ''}${bodyString}`;
+    return crypto.createHmac('sha256', secretKey).update(preHashString).digest('hex');
+  }
+
+  private async getAuthHeaders(
+    userId: number,
+    endpoint: string,
+    method: string,
+    queryString: string,
+    body: any
+  ): Promise<any> {
+    const { bitmartApiKey, bitmartApiSecret, bitmartApiMemo } = await this.getUserApiKeys(userId);
     const timestamp = Date.now().toString();
-
-    console.log('Auth Headers:');
-    console.log('API Key:', apiKey);
-    console.log('API Memo:', apiMemo);
-    console.log('Timestamp:', timestamp);
-
     const urlPath = endpoint.replace(BITMART_API_URL, '');
-    console.log('URL Path:', urlPath);
-
-    const signature = this.generateSignature(method, urlPath, timestamp, queryString, body, apiSecret, apiMemo);
-    console.log('Signature:', signature);
+    const signature = this.generateSignature(method, urlPath, timestamp, queryString, body, bitmartApiSecret, bitmartApiMemo);
 
     return {
-      'X-BM-KEY': apiKey,
+      'X-BM-KEY': bitmartApiKey,
       'X-BM-SIGN': signature,
       'X-BM-TIMESTAMP': timestamp,
-      'X-BM-MEMO': apiMemo, // Add the memo to the headers
-      'Content-Type': 'application/json'
+      'X-BM-MEMO': bitmartApiMemo,
+      'Content-Type': 'application/json',
+    };
+  }
+
+  private async getMonitoringAuthHeaders(
+    userId: number,
+    endpoint: string,
+    method: string,
+    queryString: string,
+    body: any
+  ): Promise<any> {
+    const { monitoringApiKey, monitoringApiSecret, monitoringApiMemo } = await this.getUserApiKeys(userId);
+    const timestamp = Date.now().toString();
+    const urlPath = endpoint.replace(BITMART_API_URL, '');
+    const signature = this.generateSignature(method, urlPath, timestamp, queryString, body, monitoringApiSecret, monitoringApiMemo);
+
+    return {
+      'X-BM-KEY': monitoringApiKey,
+      'X-BM-SIGN': signature,
+      'X-BM-TIMESTAMP': timestamp,
+      'X-BM-MEMO': monitoringApiMemo,
+      'Content-Type': 'application/json',
     };
   }
 
@@ -109,73 +152,22 @@ export class TradingService {
     return this.accumulatedProfit;
   }
 
-  public async getUserBalance(): Promise<number> {
+  public async getUserBalance(userId: number): Promise<number> {
     const url = `${BITMART_API_URL}/account/v1/wallet`;
-    const headers = await this.getAuthHeaders(url, 'GET', '', {});
+    const headers = await this.getAuthHeaders(userId, url, 'GET', '', {});
   
     try {
-      logger.info('Received request for user balance');
+      logger.info('Fetching user balance');
       const response = await axios.get(url, { headers });
-      logger.info('Received full response:', { responseData: response.data });
-  
-      const balances = response.data.data;
-      logger.info('Received balances object:', { balances });
-  
-      if (!balances.wallet || balances.wallet.length === 0) {
-        logger.warn('Wallet is empty');
-        return 0.00; // Return 0 if wallet is empty
-      }
-  
-      const usdtBalance = balances.wallet.find((b: any) => b.currency === 'USDT');
-      logger.info('USDT balance object:', { usdtBalance });
-  
-      if (!usdtBalance) {
-        logger.warn('USDT balance not found');
-        return 0.00; // Return 0 if USDT balance is not found
-      }
-  
-      const availableBalance = parseFloat(usdtBalance.available);
-      logger.info('Available USDT balance:', { availableBalance });
-  
-      return availableBalance;
-    } catch (error) {
-      logger.error('Error fetching user balance:', { message: (error as any).message, stack: (error as any).stack });
+      const usdtBalance = response.data.data.wallet.find((b: any) => b.currency === 'USDT');
+      return usdtBalance ? parseFloat(usdtBalance.available) : 0;
+    } catch (error: unknown) {
+      const err = error as any; // Type assertion
+      logger.error('Error fetching user balance:', err.message || 'Unknown error');
       throw new Error('Failed to fetch user balance');
     }
   }
   
-  public getTradeStatus(): { 
-    activeTrade: boolean, 
-    monitoringStatus: string, 
-    tradingSymbol: string | null, 
-    skyrocketProfitMode: boolean, 
-    skyrocketProfitTarget: number 
-  } {
-    const activeSymbols = Object.keys(this.monitorIntervals);
-    
-    if (activeSymbols.length === 0) {
-      return { 
-        activeTrade: false, 
-        monitoringStatus: 'No active trades', 
-        tradingSymbol: null, 
-        skyrocketProfitMode: false, 
-        skyrocketProfitTarget: 0 
-      };
-    }
-  
-    const symbol = activeSymbols[0]; // Assuming only one active trade at a time
-    const isMonitoringAfterSale = !!this.purchasePrices[symbol];
-  
-    const monitoringStatus = isMonitoringAfterSale ? 'Monitoring continuously' : 'Monitoring after sale';
-    return { 
-      activeTrade: true, 
-      monitoringStatus, 
-      tradingSymbol: symbol, 
-      skyrocketProfitMode: this.skyrocketProfitMode, 
-      skyrocketProfitTarget: this.skyrocketProfitTarget 
-    };
-  }
-
   private async fetchTicker(symbol: string): Promise<number> {
     const url = `${BITMART_API_URL}/spot/v1/ticker?symbol=${symbol}`;
     console.log(`Fetching ticker data for symbol: ${symbol} from URL: ${url}`);
@@ -204,113 +196,146 @@ export class TradingService {
   }
 
   // Add this method to your TradingService class
-public async getAvailableQuantity(symbol: string): Promise<number> {
-  try {
-    // Fetch user balance or account information
-    const url = `${BITMART_API_URL}/account/v1/wallet`;
-    const headers = await this.getAuthHeaders(url, 'GET', '', {});
-    const response = await axios.get(url, { headers });
-
-    // Find the specific asset quantity
-    const balances = response.data.data.wallet;
-    const asset = balances.find((b: any) => b.currency === symbol.split('_')[0]); // Adjust based on symbol format
-    return asset ? parseFloat(asset.available) : 0;
-  } catch (error) {
-    console.error('Error fetching available quantity:', error);
-    throw new Error('Failed to fetch available quantity');
-  }
-}
-
-
-  private async fetchBestMarketPrice(symbol: string): Promise<number> {
+  public async getAvailableQuantity(userId: number, symbol: string): Promise<number> {
     try {
-      const ticker = await this.exchange.fetchTicker(symbol);
+      // Fetch user balance or account information
+      const url = `${BITMART_API_URL}/account/v1/wallet`;
+      const headers = await this.getAuthHeaders(userId, url, 'GET', '', {}); // Pass userId as the first argument
+      const response = await axios.get(url, { headers });
+  
+      // Find the specific asset quantity
+      const balances = response.data.data.wallet;
+      const asset = balances.find((b: any) => b.currency === symbol.split('_')[0]); // Adjust based on symbol format
+      return asset ? parseFloat(asset.available) : 0;
+    } catch (error: unknown) {
+      const err = error as any;
+      console.error('Error fetching available quantity:', err.message || 'Unknown error');
+      throw new Error('Failed to fetch available quantity');
+    }
+  }
+  
+
+  private async fetchBestMarketPrice(userId: number, symbol: string): Promise<number> {
+    try {
+      // Fetch user-specific API keys
+      const { bitmartApiKey, bitmartApiSecret, bitmartApiMemo } = await this.getUserApiKeys(userId);
+  
+      // Initialize ccxt exchange dynamically with user keys
+      const exchange = new ccxt.bitmart({
+        apiKey: bitmartApiKey,
+        secret: bitmartApiSecret,
+        uid: bitmartApiMemo,
+      });
+  
+      // Fetch the ticker data for the given symbol
+      const ticker = await exchange.fetchTicker(symbol);
+  
       if (ticker.bid === undefined) {
         throw new Error('Failed to fetch market price');
       }
+  
       return ticker.bid; // Best bid price for sell orders
-    } catch (error) {
-      console.error('Error fetching ticker data:', error);
+    } catch (error: unknown) {
+      const err = error as any;
+      console.error('Error fetching ticker data:', err.message || 'Unknown error');
       throw new Error('Failed to fetch market price');
     }
   }
-
-  public async placeOrder(symbol: string, side: 'buy' | 'sell', quantity?: number, price?: number): Promise<void> {
+  public async placeOrder(
+    userId: number,
+    symbol: string,
+    side: 'buy' | 'sell',
+    amount?: number // "amount" will mean notional for buy orders, quantity for sell orders
+  ): Promise<void> {
     try {
-        if (side === 'sell') {
-            if (!quantity) {
-                // Fetch available quantity if not provided
-                quantity = await this.getAvailableQuantity(symbol);
-                if (quantity <= 0) {
-                    throw new Error('No available quantity to sell');
-                }
-            }
-
-            // Fetch the best market price
-            const marketPrice = await this.fetchBestMarketPrice(symbol);
-            console.log(`Placing sell order for symbol: ${symbol}, quantity: ${quantity}, market price: ${marketPrice}`);
-
-            const order = await this.exchange.createOrder(symbol, 'market', side, quantity);
-            console.log(`Sell order placed successfully for ${symbol}, quantity: ${quantity}`);
-            console.log('Order response:', JSON.stringify(order, null, 2));
-        } else { // side === 'buy'
-            if (!price) {
-                // Fetch the best market price if not provided
-                const ticker = await this.exchange.fetchTicker(symbol);
-                price = ticker.ask; // Use the ask price for buy orders
-            }
-
-            // Calculate the notional value
-            const notional = (quantity || 0) * (price || 0);
-            // Ensure the notional value meets the minimum requirement
-            if (notional < 5) {
-                throw new Error('Order notional value must be at least $5.');
-            }
-
-            console.log(`Placing buy order for symbol: ${symbol}, quantity: ${quantity}, price: ${price}`);
-            const order = await this.exchange.createOrder(symbol, 'market', side, quantity || 0, price || 0);
-            console.log(`Buy order placed successfully for ${symbol}, quantity: ${quantity}`);
-            console.log('Order response:', JSON.stringify(order, null, 2));
+      const { exchange } = await this.initializeExchanges(userId);
+  
+      if (side === 'buy') {
+        // Ensure the total cost (amount) is defined
+        if (!amount || amount <= 0) {
+          const balance = await this.getUserBalance(userId);
+          if (balance <= 0) throw new Error('Insufficient balance for buying.');
+          amount = balance; // Default to available balance
         }
-    } catch (error) {
-        console.error(`Error placing ${side} order for ${symbol}:`, (error as any).message);
-        throw new Error(`Failed to place ${side} order for ${symbol}`);
+  
+        console.log(`Placing BUY order: Symbol=${symbol}, Notional=${amount}`);
+  
+        // Set BitMart-specific behavior
+        exchange.options['createMarketBuyOrderRequiresPrice'] = false;
+  
+        // Pass "amount" as the total cost (notional)
+        const order = await exchange.createOrder(symbol, 'market', side, amount);
+  
+        logger.info(`Market BUY order placed successfully:`, order);
+      } else if (side === 'sell') {
+        // Ensure quantity is defined for sell orders
+        if (!amount || amount <= 0) {
+          amount = await this.getAvailableQuantity(userId, symbol);
+          if (amount <= 0) throw new Error('No available quantity to sell.');
+        }
+  
+        console.log(`Placing SELL order: Symbol=${symbol}, Quantity=${amount}`);
+  
+        // Pass "amount" as the quantity for sell orders
+        const order = await exchange.createOrder(symbol, 'market', side, amount);
+  
+        logger.info(`Market SELL order placed successfully:`, order);
+      }
+    } catch (error: unknown) {
+      const err = error as Error;
+      logger.error(`Error placing ${side} order for ${symbol}:`, err.message);
+      throw new Error(`Failed to place ${side} order for ${symbol}: ${err.message}`);
     }
-}
-
-  public async startTrade(symbol: string, amount: number, rebuyPercentage: number, profitTarget: number): Promise<any> {
+  }
+  
+  
+  public async startTrade(
+    userId: number,  // Add userId parameter
+    symbol: string,
+    amount: number,
+    rebuyPercentage: number,
+    profitTarget: number
+  ): Promise<any> {
     try {
-        if (!symbol || amount <= 4) {
-            throw new Error('Invalid symbol or amount.');
-        }
+      if (!symbol || amount <= 4) {
+        throw new Error('Invalid symbol or amount.');
+      }
   
-        const balance = await this.getUserBalance();
+      // Fetch user balance
+      const balance = await this.getUserBalance(userId);
+      if (amount > balance) {
+        throw new Error('Insufficient balance.');
+      }
   
-        if (amount > balance) {
-            throw new Error('Insufficient balance.');
-        }
+      // Fetch the latest price of the symbol
+      const lastPrice = await this.fetchTicker(symbol);
+      const purchaseQuantity = amount / lastPrice;
   
-        const lastPrice = await this.fetchTicker(symbol);
-        const purchaseQuantity = amount / lastPrice;
+      console.log(
+        `Placing buy order for symbol: ${symbol}, amount: ${amount}, purchaseQuantity: ${purchaseQuantity}`
+      );
   
-        console.log(`Placing buy order for symbol: ${symbol}, amount: ${amount}, purchaseQuantity: ${purchaseQuantity}`);
+      // Place a buy order
+      await this.placeOrder(userId, symbol, 'buy', purchaseQuantity); // Pass userId
   
-        await this.placeOrder(symbol, 'buy', purchaseQuantity, lastPrice); // Pass the lastPrice as the price
+      console.log(
+        `Buy order placed successfully for symbol: ${symbol}, purchaseQuantity: ${purchaseQuantity}`
+      );
   
-        console.log(`Buy order placed successfully for symbol: ${symbol}, purchaseQuantity: ${purchaseQuantity}`);
+      // Save the purchase price and initialize monitoring
+      this.purchasePrices[symbol] = { price: lastPrice, timestamp: Date.now() };
+      this.profitTarget = profitTarget;
+      this.accumulatedProfit = 0;
+      this.startDayTimestamp = Date.now();
   
-        this.purchasePrices[symbol] = { price: lastPrice, timestamp: Date.now() };
+      // Start continuous monitoring
+      this.startContinuousMonitoring(userId, symbol, purchaseQuantity, rebuyPercentage);
   
-        this.profitTarget = profitTarget;
-        this.accumulatedProfit = 0;
-        this.startDayTimestamp = Date.now();
-  
-        this.startContinuousMonitoring(symbol, purchaseQuantity, rebuyPercentage);
-  
-        return { symbol, amount, remainingBalance: balance - amount };
-    } catch (error) {
-        console.error('Error starting trade:', error);
-        throw new Error('Failed to start trade');
+      return { symbol, amount, remainingBalance: balance - amount };
+    } catch (error: unknown) {
+      const err = error as Error; // Explicitly cast error to Error
+      console.error('Error starting trade:', err.message);
+      throw new Error(`Failed to start trade: ${err.message}`);
     }
   }
   
@@ -325,283 +350,254 @@ public async getAvailableQuantity(symbol: string): Promise<number> {
     return profit;
   }
 
-  private async checkAndHandleProfit(symbol: string, quantity: number, sellPrice: number): Promise<void> {
+  private async checkAndHandleProfit(
+    userId: number, // Add userId parameter
+    symbol: string,
+    quantity: number,
+    sellPrice: number
+  ): Promise<void> {
     const profit = await this.calculateProfit(symbol, quantity, sellPrice);
     this.accumulatedProfit += profit;
     console.log(`Accumulated Profit: ${this.accumulatedProfit}`);
-
+  
     if (this.accumulatedProfit >= this.profitTarget) {
-      console.log(`Profit target of ${this.profitTarget} reached. Selling and stopping trade.`);
-      await this.placeOrder(symbol, 'sell', quantity);
+      console.log(
+        `Profit target of ${this.profitTarget} reached. Selling and stopping trade.`
+      );
+      await this.placeOrder(userId, symbol, 'sell', quantity); // Pass userId to placeOrder
       this.stopTrade();
     }
   }
+  
 
   private isNewDay(): boolean {
     const oneDayInMillis = 24 * 60 * 60 * 1000;
     return (Date.now() - this.startDayTimestamp) >= oneDayInMillis;
   }
 
-  private async startContinuousMonitoring(symbol: string, quantity: number, rebuyPercentage: number) {
+  private async startContinuousMonitoring(
+    userId: number,
+    symbol: string,
+    quantity: number,
+    rebuyPercentage: number
+  ) {
     if (this.monitorIntervals[symbol]) {
-        logger.info(`Clearing existing monitoring interval for ${symbol}.`);
-        clearInterval(this.monitorIntervals[symbol]);
+      logger.info(`Clearing existing monitoring interval for ${symbol}.`);
+      clearInterval(this.monitorIntervals[symbol]);
     }
-
+  
     logger.info(`Starting continuous monitoring for ${symbol} with rebuyPercentage: ${rebuyPercentage}.`);
-
+  
     this.monitorIntervals[symbol] = setInterval(async () => {
-        try {
-            if (this.isNewDay()) {
-                logger.info('A new day has started. Resetting accumulated profit.');
-                this.accumulatedProfit = 0;
-                this.startDayTimestamp = Date.now();
-            }
-
-            const currentPrice = await this.fetchTicker(symbol);
-            logger.info(`Current price for ${symbol}: ${currentPrice}`);
-
-            const purchase = this.purchasePrices[symbol];
-            if (!purchase) {
-                logger.info(`Purchase price not found for symbol: ${symbol}`);
-                return;
-            }
-
-            const purchasePrice = purchase.price;
-            const priceDrop = (purchasePrice - currentPrice) / purchasePrice;
-            const profit = (currentPrice - purchasePrice) / purchasePrice;
-
-            logger.info(`Purchase price for ${symbol}: ${purchasePrice}`);
-            logger.info(`Price drop for ${symbol}: ${priceDrop * 100}%`);
-            logger.info(`Current profit for ${symbol}: ${profit * 100}%`);
-
-            if (priceDrop > 0.004) { // 0.4% drop
-                logger.info(`Price dropped by more than 0.4% for ${symbol}. Selling.`);
-                await this.placeOrder(symbol, 'sell'); // No quantity specified
-                await this.checkAndHandleProfit(symbol, quantity, currentPrice);
-                delete this.purchasePrices[symbol];
-                logger.info(`Waiting for 3 minutes before starting monitorAfterSale for ${symbol}.`);
-                setTimeout(() => {
-                    this.monitorAfterSale(symbol, quantity, currentPrice, rebuyPercentage); // Start monitoring after sale after 3 minutes
-                }, 10000); // 3 minutes delay
-            } else if (profit >= 0.02) { // 2% profit
-                logger.info(`Profit of 2% or more for ${symbol}. Selling.`);
-                await this.placeOrder(symbol, 'sell'); // No quantity specified
-                await this.checkAndHandleProfit(symbol, quantity, currentPrice);
-                delete this.purchasePrices[symbol];
-                logger.info(`Waiting for 3 minutes before starting monitorAfterSale for ${symbol}.`);
-                setTimeout(() => {
-                    this.monitorAfterSale(symbol, quantity, currentPrice, rebuyPercentage); // Start monitoring after sale after 3 minutes
-                }, 18000); // 3 minutes delay
-            } else if (this.accumulatedProfit >= this.profitTarget) {
-                logger.info(`Accumulated profit target reached for ${symbol}. Selling.`);
-                await this.placeOrder(symbol, 'sell'); // No quantity specified
-                this.stopTrade();
-            } else if (Date.now() - purchase.timestamp <= 60000 && profit >= 0.05) { // 5% increase in 1 minute
-                logger.info(`5% profit in 1 minute for ${symbol}. Waiting for further changes.`);
-                await this.waitForSkyrocketingProfit(symbol, quantity, rebuyPercentage);
-            }
-        } catch (error) {
-            logger.info('Error checking price and selling: ' + error);
-        }
-    }, 10000); // Check every 25 seconds
-}
-
-  private async waitForSkyrocketingProfit(symbol: string, quantity: number, rebuyPercentage: number) {
-    this.skyrocketProfitMode = true; // Set skyrocket profit mode to true
-    this.skyrocketProfitTarget = 8; // Assuming 50% profit target for skyrocket mode
-
-    const checkSkyrocketingInterval = setInterval(async () => {
       try {
         if (this.isNewDay()) {
-          console.log('A new day has started. Resetting accumulated profit.');
+          logger.info('A new day has started. Resetting accumulated profit.');
           this.accumulatedProfit = 0;
           this.startDayTimestamp = Date.now();
         }
-
+  
         const currentPrice = await this.fetchTicker(symbol);
+        logger.info(`Current price for ${symbol}: ${currentPrice}`);
+  
         const purchase = this.purchasePrices[symbol];
         if (!purchase) {
-          console.error('Purchase price not found for symbol:', symbol);
-          clearInterval(checkSkyrocketingInterval);
+          logger.info(`Purchase price not found for symbol: ${symbol}`);
           return;
         }
-
+  
         const purchasePrice = purchase.price;
+        const priceDrop = (purchasePrice - currentPrice) / purchasePrice;
         const profit = (currentPrice - purchasePrice) / purchasePrice;
-
-        if (profit >= 0.1) { // 10% profit
-          await this.placeOrder(symbol, 'sell', quantity);
-          await this.checkAndHandleProfit(symbol, quantity, currentPrice);
+  
+        logger.info(`Purchase price for ${symbol}: ${purchasePrice}`);
+        logger.info(`Price drop for ${symbol}: ${priceDrop * 100}%`);
+        logger.info(`Current profit for ${symbol}: ${profit * 100}%`);
+  
+        // Handle price drop condition
+        if (priceDrop > 0.004) {
+          logger.info(`Price dropped by more than 0.4% for ${symbol}. Selling.`);
+          await this.placeOrder(userId, symbol, 'sell', quantity); // Add userId and side
+          await this.checkAndHandleProfit(userId, symbol, quantity, currentPrice); // Add userId and currentPrice
           delete this.purchasePrices[symbol];
-          clearInterval(checkSkyrocketingInterval);
-          this.monitorAfterSale(symbol, quantity, currentPrice, rebuyPercentage); // Start monitoring after sale
-          this.skyrocketProfitMode = false; // Reset skyrocket profit mode
-          this.skyrocketProfitTarget = 0; // Reset skyrocket profit target
+          logger.info(`Waiting for 3 minutes before starting monitorAfterSale for ${symbol}.`);
+          setTimeout(() => {
+            this.monitorAfterSale(userId, symbol, quantity, currentPrice, rebuyPercentage);
+          }, 180000); // 3 minutes delay
         }
-
+        // Handle profit condition
+        else if (profit >= 0.02) {
+          logger.info(`Profit of 2% or more for ${symbol}. Selling.`);
+          await this.placeOrder(userId, symbol, 'sell', quantity); // Add userId and side
+          await this.checkAndHandleProfit(userId, symbol, quantity, currentPrice); // Add userId and currentPrice
+          delete this.purchasePrices[symbol];
+          logger.info(`Waiting for 3 minutes before starting monitorAfterSale for ${symbol}.`);
+          setTimeout(() => {
+            this.monitorAfterSale(userId, symbol, quantity, currentPrice, rebuyPercentage);
+          }, 180000); // 3 minutes delay
+        }
+        // Handle profit target condition
+        else if (this.accumulatedProfit >= this.profitTarget) {
+          logger.info(`Accumulated profit target reached for ${symbol}. Selling.`);
+          await this.placeOrder(userId, symbol, 'sell', quantity); // Add userId and side
+          this.stopTrade();
+        }
+        // Handle skyrocketing profit condition
+        else if (Date.now() - purchase.timestamp <= 60000 && profit >= 0.05) {
+          logger.info(`5% profit in 1 minute for ${symbol}. Waiting for further changes.`);
+          await this.waitForSkyrocketingProfit(userId, symbol, quantity, rebuyPercentage);
+        }
       } catch (error) {
-        console.error('Error checking skyrocketing profit:', error);
+        logger.error('Error checking price and selling: ' + (error as Error).message);
       }
-    }, 60000); // Check every minute
-
-    setTimeout(() => {
-      clearInterval(checkSkyrocketingInterval);
-      this.skyrocketProfitMode = false; // Reset skyrocket profit mode
-      this.skyrocketProfitTarget = 0; // Reset skyrocket profit target
-    }, 240000); // Stop after 4 minutes
+    }, 10000); // Check every 10 seconds
   }
-
+  
+  private async waitForSkyrocketingProfit(
+    userId: number,
+    symbol: string,
+    quantity: number,
+    rebuyPercentage: number
+  ) {
+    logger.info(`Monitoring skyrocketing profit for ${symbol}.`);
+  
+    const checkSkyrocketingProfit = setInterval(async () => {
+      try {
+        const currentPrice = await this.fetchTicker(symbol);
+        const purchasePrice = this.purchasePrices[symbol]?.price;
+  
+        if (!purchasePrice) {
+          clearInterval(checkSkyrocketingProfit);
+          return;
+        }
+  
+        const profit = (currentPrice - purchasePrice) / purchasePrice;
+  
+        if (profit >= 0.1) { // Sell at 10% profit
+          logger.info(`Skyrocketing profit of 10% reached for ${symbol}. Selling.`);
+          await this.placeOrder(userId, symbol, 'sell', quantity);
+          this.stopTrade();
+          clearInterval(checkSkyrocketingProfit);
+        }
+      } catch (error) {
+        logger.error(`Error in waitForSkyrocketingProfit: ${error}`);
+      }
+    }, 60000); // Check every 1 minute
+  
+    setTimeout(() => clearInterval(checkSkyrocketingProfit), 240000); // Stop after 4 minutes
+  }
+  
   private activeMonitoringIntervals: { [key: string]: NodeJS.Timeout } = {};
 
-  private async monitorAfterSale(symbol: string, quantity: number, sellPrice: number, rebuyPercentage: number): Promise<void> {
+  private async monitorAfterSale(
+    userId: number,
+    symbol: string,
+    quantity: number,
+    sellPrice: number,
+    rebuyPercentage: number
+  ): Promise<void> {
     const startRebuyMonitoring = async (currentSymbol: string, quantity: number, rebuyPercentage: number) => {
-        logger.info(`Starting rebuy monitoring for ${currentSymbol} with quantity: ${quantity}, sellPrice: ${sellPrice}, rebuyPercentage: ${rebuyPercentage}`);
-
-        let initialPrice: number | undefined = await this.monitoringExchange.fetchTicker(currentSymbol).then(ticker => ticker.last);
-        if (initialPrice === undefined) {
-            logger.error(`Initial price for ${currentSymbol} is undefined.`);
+      logger.info(
+        `Starting rebuy monitoring for ${currentSymbol} with quantity: ${quantity}, sellPrice: ${sellPrice}, rebuyPercentage: ${rebuyPercentage}`
+      );
+  
+      let initialPrice: number = await this.fetchTicker(currentSymbol);
+      if (initialPrice === undefined || isNaN(initialPrice)) {
+        logger.error(`Initial price for ${currentSymbol} is invalid or undefined.`);
+        return;
+      }
+      logger.info(`Initial price for ${currentSymbol}: ${initialPrice}`);
+  
+      const checkRebuyInterval = setInterval(async () => {
+        try {
+          const currentPrice = await this.fetchTicker(currentSymbol);
+          if (currentPrice === undefined || isNaN(currentPrice)) {
+            logger.error(`Current price for ${currentSymbol} is invalid or undefined.`);
             return;
+          }
+          logger.info(`Current price for ${currentSymbol}: ${currentPrice}`);
+  
+          const priceIncrease = (currentPrice - initialPrice) / initialPrice;
+          const priceDrop = (initialPrice - currentPrice) / initialPrice;
+  
+          logger.info(
+            `Price change for ${currentSymbol}: Increase: ${(priceIncrease * 100).toFixed(2)}%, Drop: ${(priceDrop * 100).toFixed(2)}%`
+          );
+  
+          if (priceIncrease >= 0.002) {
+            logger.info(`Price increased by 0.2% or more for ${currentSymbol}.`);
+  
+            const availableBalance = await this.getUserBalance(userId);
+            logger.info(`User balance: ${availableBalance}`);
+  
+            const amountToRebuy = (availableBalance * rebuyPercentage) / 100;
+            const rebuyQuantity = amountToRebuy / currentPrice;
+  
+            if (rebuyQuantity > 0 && rebuyQuantity * currentPrice <= availableBalance) {
+              await this.placeOrder(userId, currentSymbol, 'buy', rebuyQuantity);
+              logger.info(`Buy order placed for ${currentSymbol} with quantity: ${rebuyQuantity}`);
+  
+              this.purchasePrices[currentSymbol] = { price: currentPrice, timestamp: Date.now() };
+              clearInterval(checkRebuyInterval);
+              this.startContinuousMonitoring(userId, currentSymbol, rebuyQuantity, rebuyPercentage);
+            }
+          } else if (priceDrop >= 0.05) {
+            logger.info(`Price dropped by 5% or more for ${currentSymbol}.`);
+  
+            const availableBalance = await this.getUserBalance(userId);
+            const amountToRebuy = (availableBalance * rebuyPercentage) / 100;
+            const rebuyQuantity = amountToRebuy / currentPrice;
+  
+            if (rebuyQuantity > 0 && rebuyQuantity * currentPrice <= availableBalance) {
+              await this.placeOrder(userId, currentSymbol, 'buy', rebuyQuantity);
+              logger.info(`Buy order placed for ${currentSymbol} with quantity: ${rebuyQuantity}`);
+  
+              this.purchasePrices[currentSymbol] = { price: currentPrice, timestamp: Date.now() };
+              clearInterval(checkRebuyInterval);
+              this.startContinuousMonitoring(userId, currentSymbol, rebuyQuantity, rebuyPercentage);
+            }
+          }
+  
+          const timeElapsed = Date.now() - (this.purchasePrices[currentSymbol]?.timestamp || 0);
+          if (timeElapsed >= 210000 && currentPrice !== undefined) {
+            initialPrice = currentPrice; // Safely reassign to a valid currentPrice
+          }
+        } catch (error) {
+          logger.error(`Error monitoring rebuy: ${(error as Error).message}`);
         }
-        logger.info(`Initial price for ${currentSymbol}: ${initialPrice}`);
-
-        const checkRebuyInterval = setInterval(async () => {
-            try {
-                const currentPrice = await this.monitoringExchange.fetchTicker(currentSymbol).then(ticker => ticker.last);
-                if (currentPrice === undefined) {
-                    logger.error(`Current price for ${currentSymbol} is undefined.`);
-                    return;
-                }
-                logger.info(`Current price for ${currentSymbol}: ${currentPrice}`);
-
-                if (initialPrice !== undefined) {
-                    const priceIncrease = (currentPrice - initialPrice) / initialPrice;
-                    const priceDrop = (initialPrice - currentPrice) / initialPrice;
-
-                    logger.info(`Price change for ${currentSymbol}: Increase: ${priceIncrease * 100}%, Drop: ${priceDrop * 100}%`);
-
-                    if (priceIncrease >= 0.002) { // 0.2% increase
-                        logger.info(`Price increased by 0.2% or more for ${currentSymbol}.`);
-
-                        const availableBalance = await this.getUserBalance();
-                        logger.info(`User balance: ${availableBalance}`);
-
-                        const amountToRebuy = (availableBalance * rebuyPercentage) / 100;
-                        logger.info(`Amount to rebuy: ${amountToRebuy}`);
-
-                        const rebuyQuantity = amountToRebuy / currentPrice;
-                        if (rebuyQuantity <= 0 || rebuyQuantity * currentPrice > availableBalance) {
-                            throw new Error('Insufficient balance to rebuy or invalid rebuy quantity.');
-                        }
-                        logger.info(`Rebuy quantity: ${rebuyQuantity}`);
-
-                        await this.placeOrder(currentSymbol, 'buy', rebuyQuantity, currentPrice);
-                        logger.info(`Buy order placed for ${currentSymbol} with quantity: ${rebuyQuantity}`);
-
-                        this.purchasePrices[currentSymbol] = { price: currentPrice, timestamp: Date.now() };
-                        logger.info(`Updated purchase price for ${currentSymbol}: ${currentPrice}`);
-
-                        clearInterval(checkRebuyInterval);
-
-                        // Start continuous monitoring after successful rebuy
-                        this.startContinuousMonitoring(currentSymbol, rebuyQuantity, rebuyPercentage);
-                    } else if (priceDrop >= 0.05) { // 5% drop
-                        logger.info(`Price dropped by 5% or more for ${currentSymbol}.`);
-
-                        const availableBalance = await this.getUserBalance();
-                        logger.info(`User balance: ${availableBalance}`);
-
-                        const amountToRebuy = (availableBalance * rebuyPercentage) / 100;
-                        logger.info(`Amount to rebuy: ${amountToRebuy}`);
-
-                        const rebuyQuantity = amountToRebuy / currentPrice;
-                        if (rebuyQuantity <= 0 || rebuyQuantity * currentPrice > availableBalance) {
-                            throw new Error('Insufficient balance to rebuy or invalid rebuy quantity.');
-                        }
-                        logger.info(`Rebuy quantity: ${rebuyQuantity}`);
-
-                        await this.placeOrder(currentSymbol, 'buy', rebuyQuantity, currentPrice);
-                        logger.info(`Buy order placed for ${currentSymbol} with quantity: ${rebuyQuantity}`);
-
-                        this.purchasePrices[currentSymbol] = { price: currentPrice, timestamp: Date.now() };
-                        logger.info(`Updated purchase price for ${currentSymbol}: ${currentPrice}`);
-
-                        clearInterval(checkRebuyInterval);
-
-                        // Start continuous monitoring after successful rebuy
-                        this.startContinuousMonitoring(currentSymbol, rebuyQuantity, rebuyPercentage);
-                    }
-                }
-
-                const timeElapsed = Date.now() - (this.purchasePrices[currentSymbol]?.timestamp || 0);
-                if (timeElapsed >= 210000) { // 3 minutes 30 seconds
-                    initialPrice = currentPrice;
-                } else {
-                    initialPrice = currentPrice;
-                }
-            } catch (error) {
-                logger.error('Error monitoring rebuy: ' + error);
+      }, 20000);
+  
+      this.activeMonitoringIntervals[currentSymbol] = checkRebuyInterval;
+  
+      setTimeout(async () => {
+        if (!this.purchasePrices[currentSymbol] || Date.now() - this.purchasePrices[currentSymbol].timestamp >= 3600000) {
+          logger.info(`1 hour elapsed without rebuying ${currentSymbol}. Buying into the top trending coin for the day.`);
+  
+          const trendingCoins = await getTopTrendingCoinsForTheDay();
+          if (trendingCoins.length > 0) {
+            const topTrendingCoin = trendingCoins[0].symbol;
+            const availableBalance = await this.getUserBalance(userId);
+            const currentPrice = await this.fetchTicker(topTrendingCoin);
+  
+            if (currentPrice !== undefined && !isNaN(currentPrice)) {
+              const amountToRebuy = (availableBalance * rebuyPercentage) / 100;
+              const rebuyQuantity = amountToRebuy / currentPrice;
+  
+              if (rebuyQuantity > 0 && rebuyQuantity * currentPrice <= availableBalance) {
+                await this.placeOrder(userId, topTrendingCoin, 'buy', rebuyQuantity);
+                this.purchasePrices[topTrendingCoin] = { price: currentPrice, timestamp: Date.now() };
+                this.startContinuousMonitoring(userId, topTrendingCoin, rebuyQuantity, rebuyPercentage);
+              }
             }
-        }, 20000); // Check every 25 seconds
-
-        this.activeMonitoringIntervals[currentSymbol] = checkRebuyInterval;
-
-        setTimeout(async () => {
-            if (!this.purchasePrices[currentSymbol] || Date.now() - this.purchasePrices[currentSymbol].timestamp >= 3600000) { // 1 hour
-                logger.info(`1 hour elapsed without rebuying ${currentSymbol}. Buying into the top trending coin for the day.`);
-
-                // Fetch the top trending coins for the day
-                const trendingCoins = await getTopTrendingCoinsForTheDay();
-                if (trendingCoins.length > 0) {
-                    const topTrendingCoin = trendingCoins[0].symbol;
-                    const availableBalance = await this.getUserBalance();
-                    logger.info(`User balance: ${availableBalance}`);
-
-                    // Calculate the amount to rebuy based on the user's available balance
-                    const amountToRebuy = (availableBalance * rebuyPercentage) / 100;
-                    logger.info(`Amount to rebuy: ${amountToRebuy}`);
-
-                    // Fetch the current price of the top trending coin
-                    const currentPrice = await this.monitoringExchange.fetchTicker(topTrendingCoin).then(ticker => ticker.last);
-                    if (currentPrice === undefined) {
-                        logger.error(`Current price for ${topTrendingCoin} is undefined.`);
-                        return;
-                    }
-
-                    // Calculate the quantity to rebuy based on the available amount and current price
-                    const rebuyQuantity = amountToRebuy / currentPrice;
-                    if (rebuyQuantity <= 0 || rebuyQuantity * currentPrice > availableBalance) {
-                        throw new Error('Insufficient balance to rebuy or invalid rebuy quantity.');
-                    }
-                    logger.info(`Rebuy quantity: ${rebuyQuantity}`);
-
-                    // Place the buy order for the top trending coin
-                    await this.placeOrder(topTrendingCoin, 'buy', rebuyQuantity, currentPrice);
-                    logger.info(`Buy order placed for ${topTrendingCoin} with quantity: ${rebuyQuantity}`);
-
-                    // Update the purchase price and timestamp for the new coin
-                    this.purchasePrices[topTrendingCoin] = { price: currentPrice, timestamp: Date.now() };
-                    logger.info(`Updated purchase price for ${topTrendingCoin}: ${currentPrice}`);
-
-                    // Stop monitoring the previous coin
-                    clearInterval(this.activeMonitoringIntervals[currentSymbol]);
-                    delete this.activeMonitoringIntervals[currentSymbol];
-
-                    // Start continuous monitoring for the newly purchased top trending coin
-                    this.startContinuousMonitoring(topTrendingCoin, rebuyQuantity, rebuyPercentage);
-                } else {
-                    // No trending coins found, clear the monitoring interval
-                    clearInterval(this.activeMonitoringIntervals[currentSymbol]);
-                    delete this.activeMonitoringIntervals[currentSymbol];
-                }
-            }
-        }, 3600000); // 1 hour
+          }
+          clearInterval(this.activeMonitoringIntervals[currentSymbol]);
+          delete this.activeMonitoringIntervals[currentSymbol];
+        }
+      }, 3600000);
     };
-
+  
     await startRebuyMonitoring(symbol, quantity, rebuyPercentage);
-}
-
-
+  }
+  
 public stopTrade(): void {
     Object.keys(this.activeMonitoringIntervals).forEach(symbol => {
         clearInterval(this.activeMonitoringIntervals[symbol]);
@@ -612,5 +608,23 @@ public stopTrade(): void {
 
 public getProfitTarget(): number {
     return this.profitTarget;
+}
+
+public async verifySubscription(userEmail: string): Promise<void> {
+  const user = await this.userRepository.findByEmail(userEmail);
+  if (!user || !user.has_subscription) {
+    throw new UnauthorizedException('You do not have an active subscription.');
+  }
+}
+public getStatus(): Record<string, any> {
+  return {
+    activeTrades: Object.keys(this.purchasePrices),
+    purchasePrices: this.purchasePrices,
+    profitTarget: this.profitTarget,
+    accumulatedProfit: this.accumulatedProfit,
+    skyrocketProfitMode: this.skyrocketProfitMode,
+    activeMonitoringIntervals: Object.keys(this.activeMonitoringIntervals),
+    startDayTimestamp: new Date(this.startDayTimestamp).toISOString(),
+  };
 }
 }

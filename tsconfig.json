@@ -8,8 +8,17 @@
     "forceConsistentCasingInFileNames": true,
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
-    "outDir": "./dist"  // Ensure this line is present
+    "typeRoots": ["./node_modules/@types", "./src/types"],
+    "outDir": "./dist"
   },
-  "include": ["src/**/*", "testbot.ts", "server.js"],
-  "exclude": ["node_modules", "**/*.spec.ts"]
+  "include": [
+    "src/**/*",
+    "testbot.ts",
+    "server.js",
+    "types/**/*.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/*.spec.ts"
+  ]
 }

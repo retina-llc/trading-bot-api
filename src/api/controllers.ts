@@ -1,9 +1,16 @@
-import { Controller, Get, Post, HttpException, HttpStatus, Query, Body } from '@nestjs/common';
+import { Controller, Get, Post, HttpException, HttpStatus, Query, Body, Req } from '@nestjs/common';
 import { TradingService } from './trading.service'; // Import TradingService
 import AIService from '../ai/ai.service';
 import { fetchTicker, getAIPredictions, getAIRecommendation, getOrderBook, getTicker } from './api';
 import { LogService } from './log.service';
 import { getMostVolatileCoin, getPumpedCoins, getTopGainers, getTopTrendingCoins, getTopTrendingCoinsForTheDay } from './gainer';
+import { UseGuards } from '@nestjs/common';
+import { AuthGuard } from './subscription/awt.guard';
+import { ApiService } from './api-service';
+import { Request } from 'express';
+import { RequestWithUser } from './request-user';
+import * as jwt from 'jsonwebtoken';
+import { JwtService } from '@nestjs/jwt';
 
 @Controller('trading')
 export class TradingController {
@@ -11,6 +18,9 @@ export class TradingController {
     private readonly aiService: AIService,
     private readonly tradingService: TradingService, // Inject TradingService
     private readonly logService: LogService, // Inject LogService
+    private readonly apiService: ApiService, // Inject ApiService
+    private readonly jwtService: JwtService, // Inject JwtService
+
   ) {}
 
   @Get('ticker')
@@ -82,18 +92,74 @@ export class TradingController {
   }
 
   @Get('balance')
-  async getBalance(): Promise<any> {
-    console.log('Received request for user balance');
+  async getBalance(@Req() req: Request): Promise<any> {
+    // Log the headers to ensure the token is included
+    console.log('Request headers:', req.headers);
+  
+    const authHeader = req.headers.authorization;
+  
+    // Check if the Authorization header is missing or malformed
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.error('Authorization header is missing or malformed.');
+      throw new HttpException(
+        'Authorization token is missing or malformed',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+  
+    // Extract the token from the header
+    const token = authHeader.split(' ')[1];
+  
+    // Log the extracted token
+    console.log('Extracted token:', token);
+  
+    if (!token) {
+      console.error('Token is missing.');
+      throw new HttpException('Authorization token is missing', HttpStatus.UNAUTHORIZED);
+    }
+  
     try {
-      const balance = await this.tradingService.getUserBalance();
-      console.log('User balance data:', balance);
+      const secretKey = process.env.JWT_SECRET || 'your_secret_key';
+  
+      // Decode the token to get the payload
+      const decoded = this.jwtService.verify(token, { secret: secretKey }) as any;
+  
+      // Log the decoded payload
+      console.log('Decoded token payload:', decoded);
+  
+      if (!decoded.email) {
+        console.error('Decoded token is missing the email field.');
+        throw new HttpException('Invalid token: email is missing', HttpStatus.UNAUTHORIZED);
+      }
+  
+      const userId = decoded.id; // Assuming `id` is part of the JWT payload
+  
+      // Log the extracted user ID
+      console.log('Extracted userId from token:', userId);
+  
+      if (!userId) {
+        console.error('Decoded token is missing the user ID.');
+        throw new HttpException('Invalid token: user ID is missing', HttpStatus.UNAUTHORIZED);
+      }
+  
+      console.log(`Fetching balance for userId: ${userId}`);
+  
+      // Fetch the user balance
+      const balance = await this.tradingService.getUserBalance(userId);
+  
+      // Log the fetched balance
+      console.log(`Balance fetched for userId ${userId}:`, balance);
+  
       return { balance };
     } catch (error) {
-      console.error('Error fetching user balance:', error);
-      throw error;
+      const err = error as Error; // Explicitly cast to Error type
+      console.error('Error fetching user balance:', err.message);
+      console.error('Error stack trace:', err.stack);
+  
+      throw new HttpException('Failed to fetch user balance', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
-
+  
   @Get('top-gainer')
   async getTopGainer(@Query('symbols') symbols: string): Promise<any> {
     console.log('Received request for top gainer with symbols:', symbols);
@@ -144,76 +210,54 @@ export class TradingController {
     }
   }
 
-  @Post('start-trade')
-  async startTrade(
-    @Body() tradeRequest: {
-      symbol: string,
-      amount: number,
-      rebuyPercentage: number,
-      profitTarget: number,
-    },
-  ): Promise<any> {
-    const { symbol, amount, rebuyPercentage, profitTarget } = tradeRequest;
-
-    console.log('Received request to start trade with symbol:', symbol, 'amount:', amount, 'rebuyPercentage:', rebuyPercentage, 'profitTarget:', profitTarget);
-
-    if (!symbol) {
-      console.error('Error: Symbol query parameter is required');
-      throw new HttpException('Symbol query parameter is required', HttpStatus.BAD_REQUEST);
-    }
-    if (amount < 4) {
-      console.error('Error: Investment amount must be greater than 4');
-      throw new HttpException('Investment amount must be greater than 4', HttpStatus.BAD_REQUEST);
-    }
-    if (rebuyPercentage <= 0 || rebuyPercentage > 100) {
-      console.error('Error: Rebuy percentage must be between 1 and 100');
-      throw new HttpException('Rebuy percentage must be between 1 and 100', HttpStatus.BAD_REQUEST);
-    }
-    if (profitTarget <= 0) {
-      console.error('Error: Profit target must be greater than 0');
-      throw new HttpException('Profit target must be greater than 0', HttpStatus.BAD_REQUEST);
-    }
-
-    try {
-      // Start trade using TradingService
-      const tradeResult = await this.tradingService.startTrade(symbol, amount, rebuyPercentage, profitTarget);
-      return { message: 'Trade started successfully', ...tradeResult };
-    } catch (error) {
-      console.error('Error executing trade:', error);
-      throw new HttpException('Failed to start trade', HttpStatus.INTERNAL_SERVER_ERROR);
-    }
+  @UseGuards(AuthGuard)
+@Post('start-trade')
+async startTrade(
+  @Req() req: RequestWithUser, // Use the extended Request type
+  @Body() tradeRequest: {
+    symbol: string;
+    amount: number;
+    rebuyPercentage: number;
+    profitTarget: number;
+  },
+): Promise<any> {
+  const userId = req.user?.id; // Extract userId
+  if (!userId) {
+    throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
   }
 
-  // @Get('trade-started')
-  // async tradeStarted(
-  //   @Query('symbol') symbol: string,
-  //   @Query('profitTarget') profitTarget: number,
-  //   @Query('rebuyPercentage') rebuyPercentage: number,
-  // ): Promise<any> {
-  //   console.log('Received request to mark trade as started with symbol:', symbol, 'profitTarget:', profitTarget, 'rebuyPercentage:', rebuyPercentage);
-  //   if (!symbol) {
-  //     console.error('Error: Symbol query parameter is required');
-  //     throw new HttpException('Symbol query parameter is required', HttpStatus.BAD_REQUEST);
-  //   }
-  //   if (profitTarget <= 0) {
-  //     console.error('Error: Profit target must be greater than 0');
-  //     throw new HttpException('Profit target must be greater than 0', HttpStatus.BAD_REQUEST);
-  //   }
-  //   if (rebuyPercentage <= 0 || rebuyPercentage > 100) {
-  //     console.error('Error: Rebuy percentage must be between 1 and 100');
-  //     throw new HttpException('Rebuy percentage must be between 1 and 100', HttpStatus.BAD_REQUEST);
-  //   }
+  const { symbol, amount, rebuyPercentage, profitTarget } = tradeRequest;
 
-  //   try {
-  //     // Start trade using TradingService
-  //     const tradeResult = await this.tradingService.tradeStarted(symbol, profitTarget, rebuyPercentage);
-  //     return { message: 'Trade marked as started successfully', ...tradeResult };
-  //   } catch (error) {
-  //     console.error('Error marking trade as started:', error);
-  //     throw new HttpException('Failed to mark trade as started', HttpStatus.INTERNAL_SERVER_ERROR);
-  //   }
-  // }
+  // Validate input
+  if (!symbol) {
+    throw new HttpException('Symbol query parameter is required', HttpStatus.BAD_REQUEST);
+  }
+  if (amount < 4) {
+    throw new HttpException('Investment amount must be greater than 4', HttpStatus.BAD_REQUEST);
+  }
+  if (rebuyPercentage <= 0 || rebuyPercentage > 100) {
+    throw new HttpException('Rebuy percentage must be between 1 and 100', HttpStatus.BAD_REQUEST);
+  }
+  if (profitTarget <= 0) {
+    throw new HttpException('Profit target must be greater than 0', HttpStatus.BAD_REQUEST);
+  }
 
+  try {
+    const tradeResult = await this.tradingService.startTrade(
+      userId,
+      symbol,
+      amount,
+      rebuyPercentage,
+      profitTarget,
+    );
+    return { message: 'Trade started successfully', ...tradeResult };
+  } catch (error: unknown) {
+    const err = error as Error; // Explicitly cast to Error type
+    console.error('Error executing trade:', err.message);
+    throw new HttpException('Failed to start trade', HttpStatus.INTERNAL_SERVER_ERROR);
+  }
+}
+  
   @Get('stop-trade')
   async stopTrade(): Promise<any> {
     console.log('Received request to stop trading');
@@ -225,36 +269,33 @@ export class TradingController {
       throw error;
     }
   }
-
-  @Post('place-order')
-  async placeOrder(
-    @Body('symbol') symbol: string,
-    @Body('side') side: 'buy' | 'sell',
-    @Body('quantity') quantity?: number,
-    @Body('price') price?: number,
-  ): Promise<any> {
-    console.log('Received request to place order with symbol:', symbol, 'side:', side, 'quantity:', quantity, 'price:', price);
-
-    // Validate required parameters
-    if (!symbol || !side) {
-      console.error('Error: All parameters (symbol, side) are required');
-      throw new HttpException('All parameters (symbol, side) are required', HttpStatus.BAD_REQUEST);
-    }
-
-    if (side === 'buy' && quantity === undefined) {
-      console.error('Error: Quantity is required for buy orders');
-      throw new HttpException('Quantity is required for buy orders', HttpStatus.BAD_REQUEST);
-    }
-
-    try {
-      await this.tradingService.placeOrder(symbol, side, quantity, price);
-      return { message: `Order ${side} placed for ${symbol}, quantity: ${quantity}` };
-    } catch (error) {
-      console.error('Error placing order:', error);
-      throw new HttpException('Failed to place order', HttpStatus.INTERNAL_SERVER_ERROR);
-    }
+  @UseGuards(AuthGuard)
+@Post('place-order')
+async placeOrder(
+  @Req() req: RequestWithUser,
+  @Body('symbol') symbol: string,
+  @Body('side') side: 'buy' | 'sell',
+  @Body('quantity') quantity?: number,
+): Promise<any> {
+  const userId = req.user?.id; // Extract userId
+  if (!userId) {
+    throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
   }
 
+  console.log('Received request to place order:', { userId, symbol, side, quantity });
+
+  if (!symbol || !side) {
+    throw new HttpException('Symbol and side are required', HttpStatus.BAD_REQUEST);
+  }
+
+  try {
+    await this.tradingService.placeOrder(userId, symbol, side, quantity);
+    return { message: `Order ${side} placed for ${symbol}, quantity: ${quantity}` };
+  } catch (error) {
+    console.error('Error placing order:', (error as Error).message);
+    throw new HttpException('Failed to place order', HttpStatus.INTERNAL_SERVER_ERROR);
+  }
+}
   @Get('fetch-ticker')
   async fetchTicker(@Query('symbol') symbol: string): Promise<number> {
     console.log('Received request to fetch ticker with symbol:', symbol);
@@ -299,10 +340,6 @@ export class TradingController {
     }
   }
 
-  @Get('status')
-  getStatus() {
-    return this.tradingService.getTradeStatus();
-  }
 
   @Get('logs')
   async getLogs(): Promise<string> {
@@ -339,6 +376,7 @@ export class TradingController {
       throw new HttpException('Failed to fetch top gainers', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
+  @UseGuards(AuthGuard) // Apply guard
   @Get('most-volatile-coin')
   async getMostVolatileCoin(): Promise<any> {
     console.log('Received request for most volatile coin');
@@ -348,9 +386,10 @@ export class TradingController {
       return { mostVolatileCoin };
     } catch (error) {
       console.error('Error fetching most volatile coin:', error);
-      throw error;
+      throw new HttpException('Failed to fetch most volatile coin', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
+
     @Get('top-trending-coins')
     async getTopTrendingCoins(): Promise<any> {
       console.log('Received request for top trending coins');
@@ -376,31 +415,196 @@ export class TradingController {
     }
   }
 
-@Get('pumped-coins')
-async getPumpedCoins(@Query('limit') limit: number): Promise<any> {
-  console.log('Received request for pumped coins');
-  
+  @Get('pumped-coins')
+  async getPumpedCoins(@Query('limit') limit: number): Promise<any> {
+    console.log('Received request for pumped coins');
+    try {
+      const pumpedCoins = getPumpedCoins();
+
+      const pumpedCoinsArray = Object.keys(pumpedCoins).map((symbol) => ({
+        symbol,
+        percentageIncrease: pumpedCoins[symbol].percentageIncrease,
+      }));
+
+      pumpedCoinsArray.sort((a, b) => b.percentageIncrease - a.percentageIncrease);
+
+      const resultLimit = limit && limit > 0 ? Math.min(limit, 100) : 100;
+      const limitedPumpedCoins = pumpedCoinsArray.slice(0, resultLimit);
+
+      console.log('Pumped coins data:', limitedPumpedCoins);
+      return limitedPumpedCoins;
+    } catch (error) {
+      console.error('Error fetching pumped coins:', error);
+      throw new HttpException('Failed to fetch pumped coins', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+  @Post('save-api-keys')
+async saveApiKeys(
+  @Body() body: {
+    bitmartApiKey: string;
+    bitmartApiSecret: string;
+    bitmartApiMemo: string;
+    monitoringApiKey: string;
+    monitoringApiSecret: string;
+    monitoringApiMemo: string;
+  },
+  @Req() req: Request,
+) {
+  const {
+    bitmartApiKey,
+    bitmartApiSecret,
+    bitmartApiMemo,
+    monitoringApiKey,
+    monitoringApiSecret,
+    monitoringApiMemo,
+  } = body;
+
+  // Validate all required fields
+  if (
+    !bitmartApiKey ||
+    !bitmartApiSecret ||
+    !bitmartApiMemo ||
+    !monitoringApiKey ||
+    !monitoringApiSecret ||
+    !monitoringApiMemo
+  ) {
+    throw new HttpException('All API keys and memos are required', HttpStatus.BAD_REQUEST);
+  }
+
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    throw new HttpException(
+      'Authorization token is missing or malformed',
+      HttpStatus.UNAUTHORIZED,
+    );
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  if (!token) {
+    throw new HttpException('Authorization token is missing', HttpStatus.UNAUTHORIZED);
+  }
+
   try {
-    const pumpedCoins = getPumpedCoins();
+    const secretKey = process.env.JWT_SECRET || 'your_secret_key';
+    const decoded = jwt.verify(token, secretKey) as any;
 
-    // Convert object to array and sort by the percentage increase
-    const pumpedCoinsArray = Object.keys(pumpedCoins).map(symbol => ({
-      symbol,
-      percentageIncrease: pumpedCoins[symbol].percentageIncrease,
-    }));
+    if (!decoded.email) {
+      throw new HttpException('Invalid token: email is missing', HttpStatus.UNAUTHORIZED);
+    }
 
-    // Sort pumped coins by percentage increase in descending order
-    pumpedCoinsArray.sort((a, b) => b.percentageIncrease - a.percentageIncrease);
+    const userId = decoded.id; // Assuming `id` is part of the JWT payload
+    if (!userId) {
+      throw new HttpException('Invalid token: user ID is missing', HttpStatus.UNAUTHORIZED);
+    }
 
-    // Limit the number of results returned (default to 100 if not specified)
-    const resultLimit = limit && limit > 0 ? Math.min(limit, 100) : 100;
-    const limitedPumpedCoins = pumpedCoinsArray.slice(0, resultLimit);
+    console.log('Saving API keys for userId:', userId);
 
-    console.log('Pumped coins data:', limitedPumpedCoins);
-    return limitedPumpedCoins;
+    await this.apiService.saveKeysForUser(userId, {
+      bitmartApiKey,
+      bitmartApiSecret,
+      bitmartApiMemo,
+      monitoringApiKey,
+      monitoringApiSecret,
+      monitoringApiMemo,
+    });
+
+    return { message: 'API keys saved successfully' };
   } catch (error) {
-    console.error('Error fetching pumped coins:', error);
-    throw new HttpException('Failed to fetch pumped coins', HttpStatus.INTERNAL_SERVER_ERROR);
+    console.error('Error saving API keys:', (error as Error).message);
+    throw new HttpException('Internal server error', HttpStatus.INTERNAL_SERVER_ERROR);
   }
 }
-}
+
+  
+  @Get('get-api-keys')
+  async getApiKeys(@Req() req: Request) {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      throw new HttpException(
+        'Authorization token is missing or malformed',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    if (!token) {
+      throw new HttpException('Authorization token is missing', HttpStatus.UNAUTHORIZED);
+    }
+
+    try {
+      const secretKey = process.env.JWT_SECRET || 'your_secret_key';
+      const decoded = jwt.verify(token, secretKey) as any;
+
+      if (!decoded.email) {
+        throw new HttpException('Invalid token: email is missing', HttpStatus.UNAUTHORIZED);
+      }
+
+      const userId = decoded.id; // Assuming `id` is part of the JWT payload
+      if (!userId) {
+        throw new HttpException('Invalid token: user ID is missing', HttpStatus.UNAUTHORIZED);
+      }
+
+      console.log(`Fetching API keys for userId: ${userId}`);
+
+      const apiKeys = await this.apiService.getKeysForUser(userId);
+
+      if (!apiKeys) {
+        console.error(`No API keys found for userId: ${userId}`);
+        throw new HttpException('API keys not found for user', HttpStatus.NOT_FOUND);
+      }
+
+      return { apiKeys };
+    } catch (error) {
+      console.error('Error fetching API keys:', (error as Error).message);
+      throw new HttpException('Failed to fetch API keys', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+  @Get('status')
+  getStatus() {
+    return this.tradingService.getStatus();
+  }
+  @Post('delete-api-keys')
+  async deleteApiKeys(@Req() req: Request): Promise<{ message: string }> {
+    const authHeader = req.headers.authorization;
+  
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      throw new HttpException(
+        'Authorization token is missing or malformed',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+  
+    const token = authHeader.split(' ')[1];
+  
+    if (!token) {
+      throw new HttpException('Authorization token is missing', HttpStatus.UNAUTHORIZED);
+    }
+  
+    try {
+      const secretKey = process.env.JWT_SECRET || 'your_secret_key';
+      const decoded = jwt.verify(token, secretKey) as any;
+  
+      if (!decoded.email) {
+        throw new HttpException('Invalid token: email is missing', HttpStatus.UNAUTHORIZED);
+      }
+  
+      const userId = decoded.id; // Assuming `id` is part of the JWT payload
+      if (!userId) {
+        throw new HttpException('Invalid token: user ID is missing', HttpStatus.UNAUTHORIZED);
+      }
+  
+      console.log(`Deleting API keys for userId: ${userId}`);
+  
+      await this.apiService.deleteKeysForUser(userId);
+  
+      return { message: 'API keys deleted successfully' };
+    } catch (error) {
+      console.error('Error deleting API keys:', (error as Error).message);
+      throw new HttpException('Failed to delete API keys', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+}  
