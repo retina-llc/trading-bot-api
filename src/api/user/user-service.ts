@@ -1,4 +1,5 @@
 // src/users/user.service.ts
+
 import { Injectable } from '@nestjs/common';
 import { UserRepository } from './user-repository';
 import * as bcrypt from 'bcrypt';
@@ -11,12 +12,13 @@ export class UserService {
     private readonly emailService: EmailService,
   ) {}
 
-  // Add findByEmail method
+  // Find user by email
   async findByEmail(email: string): Promise<any> {
     console.log('[UserService] Finding user by email:', email);
     return this.userRepository.findByEmail(email);
   }
 
+  // Sign up a new user
   async signUp(email: string, password: string, wallet_address: string): Promise<any> {
     console.log('UserService: Signing up user with email:', email);
 
@@ -43,6 +45,7 @@ export class UserService {
     return savedUser;
   }
 
+  // Fetch user profile by email
   async getUserProfile(email: string): Promise<any> {
     console.log('[UserService]: Fetching profile for email:', email);
   
@@ -54,10 +57,26 @@ export class UserService {
       throw new Error('User not found');
     }
   
-    // Exclude sensitive information like password
+    // Exclude sensitive info like password
     const { password, ...userProfile } = user;
     console.log('[UserService]: Returning user profile without password:', userProfile);
   
     return userProfile;
   }
-}
+
+  // ========== DELETE USER PROFILE ==========
+  /**
+   * deleteUserProfile: deletes the user by ID or email
+   * returns true if successful, false otherwise
+   */
+  async deleteUserProfile(email: string): Promise<boolean> {
+    const user = await this.findByEmail(email);
+    if (!user) {
+      return false; // user not found
+    }
+  
+    const result = await this.userRepository.delete(user.id);
+    // Safely handle 'affected' if it's null or undefined
+    return (result.affected ?? 0) > 0;
+  }
+}  

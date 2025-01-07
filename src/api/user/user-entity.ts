@@ -32,5 +32,8 @@ apiKeys!: Partial<{
   monitoringApiSecret: string;
   monitoringApiMemo: string;
 }> | null;
+@Column('decimal', { precision: 10, scale: 2, default: 0 })
+partial_usd_balance: number = 0;
+
 
 }

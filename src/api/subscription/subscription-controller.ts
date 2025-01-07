@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, HttpException, HttpStatus, Get } from '@nestjs/common';
 import { SubscriptionService } from './subscription-service';
 
 @Controller('subscription')
@@ -22,4 +22,12 @@ export class SubscriptionController {
       );
     }
   }
-}
+    @Get('asc-price')
+    async getAscPrice(): Promise<{ price: number }> {
+      // Call the service method with ascAmount = 1 to get 1 ASC price in USD
+      const oneAscInUsd = await this.subscriptionService.getAscValueInUSD(1);
+      return { price: oneAscInUsd };
+    }
+  }
+  
+  
