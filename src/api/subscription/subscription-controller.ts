@@ -1,3 +1,5 @@
+// src/subscription/subscription.controller.ts
+
 import { Controller, Post, Body, HttpException, HttpStatus, Get } from '@nestjs/common';
 import { SubscriptionService } from './subscription-service';
 
@@ -13,7 +15,17 @@ export class SubscriptionController {
   ): Promise<any> {
     try {
       const simulatedValue = BigInt(value); // Convert value to BigInt
-      await this.subscriptionService['grantSubscription'](from); // Simulate granting subscription
+
+      // Fetch the user by wallet address
+      const user = await this.subscriptionService['userRepository'].findUserByWallet(from);
+
+      if (!user) {
+        throw new HttpException('User not found', HttpStatus.NOT_FOUND);
+      }
+
+      // Simulate granting subscription
+      await this.subscriptionService.grantSubscription(user);
+
       return { message: 'Simulated transaction processed' };
     } catch (error) {
       throw new HttpException(
@@ -22,12 +34,11 @@ export class SubscriptionController {
       );
     }
   }
-    @Get('asc-price')
-    async getAscPrice(): Promise<{ price: number }> {
-      // Call the service method with ascAmount = 1 to get 1 ASC price in USD
-      const oneAscInUsd = await this.subscriptionService.getAscValueInUSD(1);
-      return { price: oneAscInUsd };
-    }
+
+  @Get('asc-price')
+  async getAscPrice(): Promise<{ price: number }> {
+    // Call the service method with ascAmount = 1 to get 1 ASC price in USD
+    const oneAscInUsd = await this.subscriptionService.getAscValueInUSD(1);
+    return { price: oneAscInUsd };
   }
-  
-  
+}

@@ -46,6 +46,7 @@ export class LoginService {
         email: user.email,
         wallet_address: user.wallet_address,
         has_subscription: user.has_subscription,
+        partial_usd_balance: user.partial_usd_balance,
       } as User,
     };
   }
