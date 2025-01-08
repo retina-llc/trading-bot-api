@@ -1,4 +1,4 @@
-import { Controller, Get, Post, HttpException, HttpStatus, Query, Body, Req } from '@nestjs/common';
+import { Controller, Get, Post, HttpException, HttpStatus, Query, Body, Req, UnauthorizedException, Delete } from '@nestjs/common';
 import { TradingService } from './trading.service'; // Import TradingService
 import AIService from '../ai/ai.service';
 import { fetchTicker, getAIPredictions, getAIRecommendation, getOrderBook, getTicker } from './api';
@@ -340,30 +340,40 @@ async placeOrder(
     }
   }
 
+  // @UseGuards(AuthGuard)
+  // @Get()
+  // async getLogs(@Req() req: Request): Promise<string> {
+  //   console.log('Received request for logs');
+  //   const user = req.user as any; // Adjust based on your authentication setup
+  //   if (!user || !user.id) {
+  //     throw new UnauthorizedException('User not found');
+  //   }
+  //   try {
+  //     const logs = await this.logService.getLogs(user.id);
+  //     return logs;
+  //   } catch (error) {
+  //     console.error('Error fetching logs:', error);
+  //     throw new HttpException('Failed to fetch logs', HttpStatus.INTERNAL_SERVER_ERROR);
+  //   }
+  // }
 
-  @Get('logs')
-  async getLogs(): Promise<string> {
-    console.log('Received request for logs');
-    try {
-      const logs = await this.logService.getLogs();
-      return logs;
-    } catch (error) {
-      console.error('Error fetching logs:', error);
-      throw new HttpException('Failed to fetch logs', HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
 
-  @Post('delete-logs')
-  async deleteLogs(): Promise<any> {
-    console.log('Received request to delete logs');
-    try {
-      await this.logService.deleteAllLogs();
-      return { message: 'Logs deleted successfully' };
-    } catch (error) {
-      console.error('Error deleting logs:', error);
-      throw new HttpException('Failed to delete logs', HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
+  // @UseGuards(AuthGuard)
+  // @Post()
+  // async deleteLogs(@Req() req: Request): Promise<string> {
+  //   console.log('Received request to delete logs');
+  //   const user = req.user as any; // Adjust based on your authentication setup
+  //   if (!user || !user.id) {
+  //     throw new UnauthorizedException('User not found');
+  //   }
+  //   try {
+  //     await this.logService.deleteUserLogs(user.id);
+  //     return 'Logs deleted successfully';
+  //   } catch (error) {
+  //     console.error('Error deleting logs:', error);
+  //     throw new HttpException('Failed to delete logs', HttpStatus.INTERNAL_SERVER_ERROR);
+  //   }
+  // }
   @Get('top-gainers')
   async getTopGainers(): Promise<any> {
     console.log('Received request for top gainers');

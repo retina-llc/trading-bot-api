@@ -1,21 +1,39 @@
-import { Injectable } from '@nestjs/common';
+// src/auth/jwt.strategy.ts
+import { Injectable, UnauthorizedException, Logger } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt'; // Import Strategy and ExtractJwt
-import { ConfigService } from '@nestjs/config'; 
+import { ExtractJwt, Strategy } from 'passport-jwt';
+import { ConfigService } from '@nestjs/config';
+import { UserService } from '../api/user/user-service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(configService: ConfigService) {
+  private readonly logger = new Logger(JwtStrategy.name);
+
+  constructor(
+    private configService: ConfigService,
+    private usersService: UserService, // Inject UsersService
+  ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      ignoreExpiration: false, // Enforce token expiration
-      secretOrKey: configService.get<string>('JWT_SECRET') || 'defaultSecret',
+      ignoreExpiration: false,
+      secretOrKey: configService.get<string>('JWT_SECRET') || 'your_secret_key',
     });
-    console.log('[JwtStrategy] Initialized with secret key.');
   }
 
   async validate(payload: any) {
-    console.log('[JwtStrategy] Validating payload:', payload);
-    return { userId: payload.sub, email: payload.email };
+    this.logger.log(`Validating payload: ${JSON.stringify(payload)}`);
+
+    const userId = payload.id; // Use 'id' instead of 'sub'
+
+    const user = await this.usersService.findOneById(userId);
+    if (!user) {
+      this.logger.warn(`User with id ${userId} not found`);
+      throw new UnauthorizedException('User not found');
+    }
+
+    this.logger.log(`User found: ${JSON.stringify(user)}`);
+
+    // Return a subset of the user object as needed
+    return { id: user.id, email: user.email };
   }
 }

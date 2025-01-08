@@ -1,6 +1,8 @@
+// src/logger.service.ts
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as glob from 'glob'; // Ensure you have installed glob: npm install glob
 
 @Injectable()
 export class LogService {
@@ -22,7 +24,12 @@ export class LogService {
     }
   }
 
-  async getLogs(): Promise<string> {
+  /**
+   * Retrieves logs for a specific user.
+   * @param userId - The ID of the user whose logs are to be fetched.
+   * @returns The log contents as a string or a message if no logs are available.
+   */
+  async getLogs(userId: number): Promise<string> {
     try {
       console.log(`Logs directory: ${this.logsDirectory}`);
 
@@ -31,37 +38,45 @@ export class LogService {
         return 'No records available';
       }
 
-      // Refresh the list of log files
-      const logFiles = fs.readdirSync(this.logsDirectory);
-      console.log(`Log files found: ${logFiles.join(', ')}`);
+      // Use glob to match user-specific log files
+      const userLogPattern = path.join(this.logsDirectory, `user-${userId}-*.log`);
+      const logFiles = glob.sync(userLogPattern);
+      console.log(`Log files found for user ${userId}: ${logFiles.join(', ')}`);
 
       if (logFiles.length === 0) {
-        console.error(`No log files found in directory: ${this.logsDirectory}`);
+        console.error(`No log files found for user ID ${userId}.`);
         return 'No records available';
       }
 
-      const logContents = logFiles.map(file => {
-        const filePath = path.join(this.logsDirectory, file);
-        console.log(`Reading log file: ${filePath}`);
-
+      let logContents = '';
+      for (const file of logFiles) {
+        console.log(`Reading log file: ${file}`);
         try {
-          const fileContents = fs.readFileSync(filePath, 'utf8');
-          const formattedEntries = fileContents.split('\n').map(this.formatLogEntry.bind(this)).join('\n');
-          return formattedEntries;
+          const fileContents = fs.readFileSync(file, 'utf8');
+          const formattedEntries = fileContents
+            .split('\n')
+            .filter(entry => entry.trim() !== '')
+            .map(this.formatLogEntry.bind(this))
+            .join('\n');
+          logContents += formattedEntries + '\n';
         } catch (fileReadError) {
-          console.error(`Failed to read file ${filePath}:`, (fileReadError instanceof Error) ? fileReadError.message : String(fileReadError));
-          return '';  // Returning empty string in case of read errors
+          console.error(`Failed to read file ${file}:`, (fileReadError instanceof Error) ? fileReadError.message : String(fileReadError));
+          // Continue reading other files even if one fails
         }
-      }).join('\n');
+      }
 
-      return logContents || 'No records available';  // Return message if logContents is empty
+      return logContents.trim() || 'No records available';
     } catch (error) {
       console.error('Failed to read log files:', (error instanceof Error) ? error.message : String(error));
       throw new InternalServerErrorException('Failed to read log files');
     }
   }
 
-  async deleteAllLogs(): Promise<void> {
+  /**
+   * Deletes all logs for a specific user.
+   * @param userId - The ID of the user whose logs are to be deleted.
+   */
+  async deleteUserLogs(userId: number): Promise<void> {
     try {
       console.log(`Logs directory: ${this.logsDirectory}`);
 
@@ -70,12 +85,14 @@ export class LogService {
         throw new InternalServerErrorException(`Logs directory does not exist: ${this.logsDirectory}`);
       }
 
-      const logFiles = fs.readdirSync(this.logsDirectory);
+      // Use glob to match user-specific log files
+      const userLogPattern = path.join(this.logsDirectory, `user-${userId}-*.log`);
+      const logFiles = glob.sync(userLogPattern);
       console.log(`Log files found for deletion: ${logFiles.join(', ')}`);
 
       if (logFiles.length === 0) {
-        console.error(`No log files found in directory: ${this.logsDirectory}`);
-        throw new InternalServerErrorException(`No log files found in directory: ${this.logsDirectory}`);
+        console.error(`No log files found for user ID ${userId} to delete.`);
+        throw new InternalServerErrorException(`No log files found for user ID ${userId}`);
       }
 
       logFiles.forEach(file => {
@@ -83,12 +100,13 @@ export class LogService {
         console.log(`Deleting log file: ${filePath}`);
         try {
           fs.unlinkSync(filePath);
+          console.log(`Deleted log file: ${filePath}`);
         } catch (deleteError) {
           console.error(`Failed to delete file ${filePath}:`, (deleteError instanceof Error) ? deleteError.message : String(deleteError));
         }
       });
 
-      console.log(`All log files deleted successfully.`);
+      console.log(`All log files for user ID ${userId} deleted successfully.`);
     } catch (error) {
       console.error('Failed to delete log files:', (error instanceof Error) ? error.message : String(error));
       throw new InternalServerErrorException('Failed to delete log files');

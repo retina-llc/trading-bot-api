@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import axios from 'axios';
 import * as crypto from 'crypto';
 import * as ccxt from 'ccxt';
-import logger from './logger';
+import { getUserLogger } from './logger'; // Import the logger factory
 import { getTopTrendingCoinsForTheDay } from './gainer';
 import { UserRepository } from './user/user-repository';
 
@@ -153,6 +153,7 @@ export class TradingService {
   }
 
   public async getUserBalance(userId: number): Promise<number> {
+    const logger = getUserLogger(userId); // Retrieve user-specific logger
     const url = `${BITMART_API_URL}/account/v1/wallet`;
     const headers = await this.getAuthHeaders(userId, url, 'GET', '', {});
   
@@ -242,6 +243,7 @@ export class TradingService {
     }
   }
   public async placeOrder(
+    
     userId: number,
     symbol: string,
     side: 'buy' | 'sell',
@@ -249,7 +251,8 @@ export class TradingService {
   ): Promise<void> {
     try {
       const { exchange } = await this.initializeExchanges(userId);
-  
+      const logger = getUserLogger(userId); // Retrieve user-specific logger
+
       if (side === 'buy') {
         // Ensure the total cost (amount) is defined
         if (!amount || amount <= 0) {
@@ -282,6 +285,7 @@ export class TradingService {
         logger.info(`Market SELL order placed successfully:`, order);
       }
     } catch (error: unknown) {
+      const logger = getUserLogger(userId); // Retrieve user-specific logger
       const err = error as Error;
       logger.error(`Error placing ${side} order for ${symbol}:`, err.message);
       throw new Error(`Failed to place ${side} order for ${symbol}: ${err.message}`);
@@ -381,6 +385,8 @@ export class TradingService {
     quantity: number,
     rebuyPercentage: number
   ) {
+    const logger = getUserLogger(userId); // Retrieve user-specific logger
+
     if (this.monitorIntervals[symbol]) {
       logger.info(`Clearing existing monitoring interval for ${symbol}.`);
       clearInterval(this.monitorIntervals[symbol]);
@@ -458,8 +464,10 @@ export class TradingService {
     quantity: number,
     rebuyPercentage: number
   ) {
+    const logger = getUserLogger(userId); // Retrieve user-specific logger
+
     logger.info(`Monitoring skyrocketing profit for ${symbol}.`);
-  
+
     const checkSkyrocketingProfit = setInterval(async () => {
       try {
         const currentPrice = await this.fetchTicker(symbol);
@@ -495,6 +503,8 @@ export class TradingService {
     sellPrice: number,
     rebuyPercentage: number
   ): Promise<void> {
+    const logger = getUserLogger(userId); // Retrieve user-specific logger
+
     const startRebuyMonitoring = async (currentSymbol: string, quantity: number, rebuyPercentage: number) => {
       logger.info(
         `Starting rebuy monitoring for ${currentSymbol} with quantity: ${quantity}, sellPrice: ${sellPrice}, rebuyPercentage: ${rebuyPercentage}`

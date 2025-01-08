@@ -16,6 +16,7 @@ import { EmailModule } from './api/email/email-module';
 import { AuthModule } from './auth/auth.module';
 import { SubscriptionController } from './api/subscription/subscription-controller';
 import { ContactUsController } from './api/email/contact-us';
+import { LoggerModule } from './api/logger.module';
 
 @Module({
   imports: [
@@ -62,9 +63,10 @@ import { ContactUsController } from './api/email/contact-us';
       },
     }),
     AuthModule,
+    LoggerModule,
   ],
   controllers: [TradingController, SubscriptionController, ContactUsController],
-  providers: [AIService, GeminiAIClient, LogService, SubscriptionService],
+  providers: [AIService, GeminiAIClient, SubscriptionService],
 })
 export class AppModule implements OnModuleInit {
   constructor(private readonly subscriptionService: SubscriptionService) {}
