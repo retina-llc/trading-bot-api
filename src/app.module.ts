@@ -1,3 +1,4 @@
+// app.module.ts
 import { Module, OnModuleInit } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bull';
@@ -17,6 +18,8 @@ import { AuthModule } from './auth/auth.module';
 import { SubscriptionController } from './api/subscription/subscription-controller';
 import { ContactUsController } from './api/email/contact-us';
 import { LoggerModule } from './api/logger.module';
+import * as fs from 'fs';
+import * as path from 'path';
 
 @Module({
   imports: [
@@ -26,22 +29,62 @@ import { LoggerModule } from './api/logger.module';
       envFilePath: '.env',
     }),
 
-    // 2. Configure TypeOrmModule with ConfigService
+    // 2. Configure TypeOrmModule with SSL Settings
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: async (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get<string>('DB_HOST'),
-        port: parseInt(configService.get<string>('DB_PORT') || '5432', 10),
-        username: configService.get<string>('DB_USER'),
-        password: configService.get<string>('DB_PASSWORD')?.trim(),
-        database: configService.get<string>('DB_NAME'),
-        entities: [User],
-        autoLoadEntities: true,
-        synchronize: true,
-        logging: true,
-      }),
+      useFactory: async (configService: ConfigService) => {
+        // Retrieve SSL configuration from environment variables
+        const sslMode = configService.get<string>('DB_SSLMODE');
+        const sslCertPath = configService.get<string>('DB_SSLROOTCERT') || path.resolve(__dirname, '../Downloads/us-east-1-bundle.pem');
+
+        let sslOptions: boolean | { rejectUnauthorized: boolean; ca: string } = false;
+
+        if (sslMode === 'verify-full') {
+          if (fs.existsSync(sslCertPath)) {
+            const ca = fs.readFileSync(sslCertPath).toString();
+            sslOptions = {
+              rejectUnauthorized: true, // Ensures the server certificate is verified
+              ca: ca,
+            };
+            console.log('TypeOrmModule SSL is enabled with the provided certificate.');
+          } else {
+            console.error(`TypeOrmModule SSL certificate not found at path: ${sslCertPath}`);
+            throw new Error(`SSL certificate not found at path: ${sslCertPath}`);
+          }
+        } else {
+          console.warn('TypeOrmModule SSL is not enabled. It is recommended to use SSL for database connections.');
+        }
+
+        // Log the connection configuration (excluding sensitive information)
+        console.log('TypeOrmModule Connection Configuration:');
+        console.log({
+          type: 'postgres',
+          host: configService.get<string>('DB_HOST'),
+          port: configService.get<string>('DB_PORT'),
+          username: configService.get<string>('DB_USER'),
+          database: configService.get<string>('DB_NAME'),
+          ssl: sslOptions,
+        });
+
+        return {
+          type: 'postgres',
+          host: configService.get<string>('DB_HOST') || 'localhost',
+          port: parseInt(configService.get<string>('DB_PORT') || '5432', 10),
+          username: configService.get<string>('DB_USER') || 'postgres',
+          password: configService.get<string>('DB_PASSWORD') || 'password',
+          database: configService.get<string>('DB_NAME') || 'postgres',
+          synchronize: false, // Always false in production
+          logging: ['error', 'warn', 'info', 'query'], // Enable detailed logging
+          entities: [User],
+          autoLoadEntities: true,
+          migrations: ['./src/migrations/*.ts'],
+          subscribers: [],
+          extra: {
+            ssl: sslOptions, // Correctly nested within 'extra'
+          },
+        };
+      },
     }),
 
     // 3. Register User Entity

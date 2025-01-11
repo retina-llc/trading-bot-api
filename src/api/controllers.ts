@@ -1,4 +1,4 @@
-import { Controller, Get, Post, HttpException, HttpStatus, Query, Body, Req, UnauthorizedException, Delete } from '@nestjs/common';
+import { Controller, Get, Post, HttpException, HttpStatus, Query, Body, Req, UnauthorizedException, Delete, BadRequestException } from '@nestjs/common';
 import { TradingService } from './trading.service'; // Import TradingService
 import AIService from '../ai/ai.service';
 import { fetchTicker, getAIPredictions, getAIRecommendation, getOrderBook, getTicker } from './api';
@@ -209,93 +209,143 @@ export class TradingController {
       throw error;
     }
   }
-
-  @UseGuards(AuthGuard)
+/**
+   * Endpoint to start a trade.
+   * 
+   * @param req - The request object containing user information.
+   * @param body.symbol - The trading pair symbol in "BASE_QUOTE" format (e.g., "PWC_USDT").
+   * @param body.amount - The amount to invest.
+   * @param body.rebuyPercentage - The percentage to rebuy.
+   * @param body.profitTarget - The profit target.
+   * @returns A success message or throws an error.
+   */
+@UseGuards(AuthGuard) // Protect the endpoint
 @Post('start-trade')
 async startTrade(
-  @Req() req: RequestWithUser, // Use the extended Request type
-  @Body() tradeRequest: {
-    symbol: string;
-    amount: number;
-    rebuyPercentage: number;
-    profitTarget: number;
-  },
-): Promise<any> {
-  const userId = req.user?.id; // Extract userId
-  if (!userId) {
-    throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
-  }
-
-  const { symbol, amount, rebuyPercentage, profitTarget } = tradeRequest;
-
-  // Validate input
-  if (!symbol) {
-    throw new HttpException('Symbol query parameter is required', HttpStatus.BAD_REQUEST);
-  }
-  if (amount < 4) {
-    throw new HttpException('Investment amount must be greater than 4', HttpStatus.BAD_REQUEST);
-  }
-  if (rebuyPercentage <= 0 || rebuyPercentage > 100) {
-    throw new HttpException('Rebuy percentage must be between 1 and 100', HttpStatus.BAD_REQUEST);
-  }
-  if (profitTarget <= 0) {
-    throw new HttpException('Profit target must be greater than 0', HttpStatus.BAD_REQUEST);
-  }
-
-  try {
-    const tradeResult = await this.tradingService.startTrade(
-      userId,
-      symbol,
-      amount,
-      rebuyPercentage,
-      profitTarget,
-    );
-    return { message: 'Trade started successfully', ...tradeResult };
-  } catch (error: unknown) {
-    const err = error as Error; // Explicitly cast to Error type
-    console.error('Error executing trade:', err.message);
-    throw new HttpException('Failed to start trade', HttpStatus.INTERNAL_SERVER_ERROR);
-  }
-}
-  
-  @Get('stop-trade')
-  async stopTrade(): Promise<any> {
-    console.log('Received request to stop trading');
-    try {
-      this.tradingService.stopTrade();
-      return { message: 'Trading stopped successfully' };
-    } catch (error) {
-      console.error('Error stopping trade:', error);
-      throw error;
-    }
-  }
-  @UseGuards(AuthGuard)
-@Post('place-order')
-async placeOrder(
   @Req() req: RequestWithUser,
-  @Body('symbol') symbol: string,
-  @Body('side') side: 'buy' | 'sell',
-  @Body('quantity') quantity?: number,
+  @Body() body: { symbol: string; amount: number; rebuyPercentage: number; profitTarget: number }
 ): Promise<any> {
   const userId = req.user?.id; // Extract userId
   if (!userId) {
     throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
   }
 
-  console.log('Received request to place order:', { userId, symbol, side, quantity });
+  const { symbol, amount, rebuyPercentage, profitTarget } = body;
 
-  if (!symbol || !side) {
-    throw new HttpException('Symbol and side are required', HttpStatus.BAD_REQUEST);
+  if (!symbol || !amount || !rebuyPercentage || !profitTarget) {
+    throw new BadRequestException('Symbol, amount, rebuyPercentage, and profitTarget are required.');
   }
 
   try {
-    await this.tradingService.placeOrder(userId, symbol, side, quantity);
-    return { message: `Order ${side} placed for ${symbol}, quantity: ${quantity}` };
-  } catch (error) {
-    console.error('Error placing order:', (error as Error).message);
-    throw new HttpException('Failed to place order', HttpStatus.INTERNAL_SERVER_ERROR);
+    const result = await this.tradingService.startTrade(userId, symbol, amount, rebuyPercentage, profitTarget);
+    return { message: `Trade started for ${symbol}.`, ...result };
+  } catch (error: unknown) {
+    const err = error as Error;
+    console.error(`[startTrade] Error: ${err.message}`);
+    throw new HttpException(`Failed to start trade: ${err.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
   }
 }
+
+  /**
+   * Validates and converts a value to a number.
+   * @param value The value to validate and convert.
+   * @param fieldName The name of the field (for error messages).
+   * @param min The minimum allowed value (inclusive).
+   * @param errorMessage The error message to throw if validation fails.
+   * @param max Optional maximum allowed value (inclusive).
+   * @returns The validated and converted number.
+   */
+  private validateAndConvertNumber(
+    value: number | string,
+    fieldName: string,
+    min: number,
+    errorMessage: string,
+    max?: number,
+  ): number {
+    let numericValue: number;
+
+    if (typeof value === 'number') {
+      numericValue = value;
+    } else if (typeof value === 'string') {
+      numericValue = parseFloat(value);
+      if (isNaN(numericValue)) {
+        throw new BadRequestException(`${fieldName} must be a valid number.`);
+      }
+    } else {
+      throw new BadRequestException(`${fieldName} must be a number.`);
+    }
+
+    if (numericValue < min) {
+      throw new BadRequestException(errorMessage);
+    }
+
+    if (max !== undefined && numericValue > max) {
+      throw new BadRequestException(errorMessage);
+    }
+
+    // Log the type and value for debugging
+    console.log(`[startTrade] ${fieldName}:`, numericValue, `(${typeof numericValue})`);
+
+    return numericValue;
+  }
+
+  
+ // trading.controller.ts
+
+@UseGuards(AuthGuard) // Apply AuthGuard
+@Get('stop-trade')
+async stopTrade(@Req() req: RequestWithUser): Promise<any> {
+  const userId = req.user?.id; // Extract userId
+  if (!userId) {
+    throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
+  }
+
+  console.log(`Received request to stop trading for userId: ${userId}`);
+  
+  try {
+    this.tradingService.stopTrade();
+    return { message: 'Trading stopped successfully' };
+  } catch (error) {
+    console.error('Error stopping trade:', error);
+    throw new HttpException('Failed to stop trade', HttpStatus.INTERNAL_SERVER_ERROR);
+  }
+}
+ /**
+   * Endpoint to place a buy or sell order.
+   * 
+   * @param req - The request object containing user information.
+   * @param body.symbol - The trading pair symbol in "PWC_USDT" format.
+   * @param body.side - 'buy' or 'sell'.
+   * @param body.amount - The amount to buy or sell.
+   * @returns A success message or throws an error.
+   */
+ @UseGuards(AuthGuard) // Protect the endpoint
+ @Post('place-order')
+ async placeOrder(
+   @Req() req: RequestWithUser,
+   @Body() body: { symbol: string; side: 'buy' | 'sell'; amount?: number }
+ ): Promise<any> {
+   const userId = req.user?.id; // Extract userId
+   if (!userId) {
+     throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
+   }
+
+   const { symbol, side, amount } = body;
+
+   if (!symbol || !side) {
+     throw new BadRequestException('Symbol and side are required.');
+   }
+
+   try {
+     await this.tradingService.placeOrder(userId, symbol, side, amount);
+     return { message: `Order ${side} placed for ${symbol}.` };
+   } catch (error: unknown) {
+     const err = error as Error;
+     console.error(`[placeOrder] Error: ${err.message}`);
+     throw new HttpException(`Failed to place order: ${err.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+   }
+ }
+
   @Get('fetch-ticker')
   async fetchTicker(@Query('symbol') symbol: string): Promise<number> {
     console.log('Received request to fetch ticker with symbol:', symbol);
@@ -340,40 +390,6 @@ async placeOrder(
     }
   }
 
-  // @UseGuards(AuthGuard)
-  // @Get()
-  // async getLogs(@Req() req: Request): Promise<string> {
-  //   console.log('Received request for logs');
-  //   const user = req.user as any; // Adjust based on your authentication setup
-  //   if (!user || !user.id) {
-  //     throw new UnauthorizedException('User not found');
-  //   }
-  //   try {
-  //     const logs = await this.logService.getLogs(user.id);
-  //     return logs;
-  //   } catch (error) {
-  //     console.error('Error fetching logs:', error);
-  //     throw new HttpException('Failed to fetch logs', HttpStatus.INTERNAL_SERVER_ERROR);
-  //   }
-  // }
-
-
-  // @UseGuards(AuthGuard)
-  // @Post()
-  // async deleteLogs(@Req() req: Request): Promise<string> {
-  //   console.log('Received request to delete logs');
-  //   const user = req.user as any; // Adjust based on your authentication setup
-  //   if (!user || !user.id) {
-  //     throw new UnauthorizedException('User not found');
-  //   }
-  //   try {
-  //     await this.logService.deleteUserLogs(user.id);
-  //     return 'Logs deleted successfully';
-  //   } catch (error) {
-  //     console.error('Error deleting logs:', error);
-  //     throw new HttpException('Failed to delete logs', HttpStatus.INTERNAL_SERVER_ERROR);
-  //   }
-  // }
   @Get('top-gainers')
   async getTopGainers(): Promise<any> {
     console.log('Received request for top gainers');
