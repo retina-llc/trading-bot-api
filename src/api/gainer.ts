@@ -1,6 +1,9 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import { EmailService } from './email/email-service';
+
+const emailService = new EmailService();
 
 // API keys for the top gainers
 const TOP_GAINERS_API_KEY = '63cbdd8eb8f3b73d9cb852072290648ba91a9fa8';

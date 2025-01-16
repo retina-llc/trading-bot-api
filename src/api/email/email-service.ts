@@ -25,7 +25,7 @@ export class EmailService {
    */
   async sendWelcomeEmail(to: string): Promise<void> {
     const mailOptions = {
-      from: '"Ascari Trading Bot" <no-reply@ascaritradingbot.com>',
+      from: '"Ascari Bot" <no-reply@ascaritradingbot.com>',
       to,
       subject: 'Welcome to Ascari Trading Bot!',
       html: this.getWelcomeTemplate(),
@@ -234,7 +234,7 @@ export class EmailService {
       <div style="font-family: Arial, sans-serif; text-align: center;">
         <h1>Welcome to Ascari Trading Bot!</h1>
         <p>We're excited to have you on board. Start exploring the trading features now.</p>
-        <a href="https://ascaritradingbot.com" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Get Started</a>
+        <a href="https://tradingbot.ascarinet.com" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Get Started</a>
       </div>
     `;
   }
@@ -246,7 +246,7 @@ export class EmailService {
         <p>Your subscription has been successfully activated. 🎉</p>
         <p><strong>Subscription Expiry Date:</strong> ${expiryDate}</p>
         <p>Enjoy the full features of Ascari Trading Bot!</p>
-        <a href="https://ascaritradingbot.com" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Explore Features</a>
+        <a href="https://tradingbot.ascarinet.com" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Explore Features</a>
       </div>
     `;
   }
@@ -293,7 +293,7 @@ export class EmailService {
         <p><strong>Required for Renewal:</strong> $${requiredUsd.toFixed(2)} (${requiredAsc.toFixed(4)} ASC)</p>
         <p>If you have sufficient credits, your subscription will be renewed automatically on the expiry date.</p>
         <p>If not, please make a payment to continue enjoying our services without interruption.</p>
-        <a href="https://ascaritradingbot.com" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Manage Subscription</a>
+        <a href="https://tradingbot.ascarinet.com" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Manage Subscription</a>
       </div>
     `;
   }
@@ -309,7 +309,7 @@ export class EmailService {
         <p>Your subscription has been successfully renewed and is now active until <strong>${newExpiry}</strong>.</p>
         <p><strong>Remaining Credit Balance:</strong> $${remainingUsd.toFixed(2)} (${remainingAsc.toFixed(4)} ASC)</p>
         <p>Thank you for continuing to use Ascari Trading Bot!</p>
-        <a href="https://ascaritradingbot.com" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Explore Features</a>
+        <a href="https://tradingbot.ascarinet.com" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Explore Features</a>
       </div>
     `;
   }
@@ -324,7 +324,7 @@ export class EmailService {
         <p>We're sorry to inform you that your subscription has been deactivated due to insufficient credits.</p>
         <p><strong>Amount Missing:</strong> $${missingUsd.toFixed(2)} (${missingAsc.toFixed(4)} ASC)</p>
         <p>Please make a payment to reactivate your subscription and continue enjoying our services.</p>
-        <a href="https://ascaritradingbot.com" style="padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 5px;">Reactivate Subscription</a>
+        <a href="https://tradingbot.ascarinet.com" style="padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 5px;">Reactivate Subscription</a>
       </div>
     `;
   }
@@ -339,7 +339,7 @@ export class EmailService {
         <p>Your subscription has been successfully renewed and is now active for another month.</p>
         <p><strong>Remaining Credit Balance:</strong> $${remainingUsd.toFixed(2)} (${remainingAsc.toFixed(4)} ASC)</p>
         <p>Thank you for using Ascari Trading Bot!</p>
-        <a href="https://ascaritradingbot.com" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Explore Features</a>
+        <a href="https://tradingbot.ascarinet.com" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Explore Features</a>
       </div>
     `;
   }
