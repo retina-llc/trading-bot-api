@@ -26,8 +26,8 @@ import { UserService } from './user-service';
 
 @Controller('users')
 export class UserController {
-  private verificationCodes = new Map<string, string>();
-
+  private verificationCodes = new Map<string, string>(); // email -> verification code
+  private resetTokens = new Map<string, string>()
   constructor(
     private readonly userService: UserService,
     private readonly loginService: LoginService,
@@ -209,4 +209,64 @@ export class UserController {
       throw new HttpException('Failed to delete profile', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
+  @Post('reset-password/request')
+  async resetPasswordRequest(@Body() body: { email: string }): Promise<{ message: string }> {
+    const { email } = body;
+    if (!email) {
+      throw new HttpException('Email is required', HttpStatus.BAD_REQUEST);
+    }
+    // Generate a random six-digit code (as a string)
+    const code = crypto.randomInt(100000, 1000000).toString();
+    this.verificationCodes.set(email, code);
+    // Optionally, you could set a timeout for this code to expire.
+    console.log(`[ResetPassword] Sending verification code ${code} to email: ${email}`);
+    
+    await this.emailService.sendEmail({
+      to: email,
+      subject: 'Your Password Reset Verification Code',
+      text: `Your password reset verification code is: ${code}`,
+    });
+    return { message: 'Verification code sent to your email' };
+  }
+  @Post('reset-password/verify')
+  async verifyResetCode(@Body() body: { email: string; code: string }): Promise<{ resetToken: string }> {
+    const { email, code } = body;
+    if (!email || !code) {
+      throw new HttpException('Email and code are required', HttpStatus.BAD_REQUEST);
+    }
+    const savedCode = this.verificationCodes.get(email);
+    if (!savedCode || savedCode !== code) {
+      throw new HttpException('Invalid or expired verification code', HttpStatus.BAD_REQUEST);
+    }
+    // Generate a temporary reset token (here we use a simple random string, but you can also use JWT)
+    const resetToken = crypto.randomBytes(20).toString('hex');
+    this.resetTokens.set(email, resetToken);
+    // Remove the used verification code
+    this.verificationCodes.delete(email);
+    return { resetToken };
+  }
+  @Post('reset-password/update')
+  async updatePassword(
+    @Body()
+    body: { email: string; resetToken: string; newPassword: string; confirmPassword: string },
+  ): Promise<{ message: string }> {
+    const { email, resetToken, newPassword, confirmPassword } = body;
+    if (!email || !resetToken || !newPassword || !confirmPassword) {
+      throw new HttpException('All fields are required', HttpStatus.BAD_REQUEST);
+    }
+    if (newPassword !== confirmPassword) {
+      throw new HttpException('Passwords do not match', HttpStatus.BAD_REQUEST);
+    }
+    const savedResetToken = this.resetTokens.get(email);
+    if (!savedResetToken || savedResetToken !== resetToken) {
+      throw new HttpException('Invalid or expired reset token', HttpStatus.BAD_REQUEST);
+    }
+
+    // Call the service method to update the password
+    await this.userService.resetPassword(email, newPassword);
+    // Clean up the reset token
+    this.resetTokens.delete(email);
+    return { message: 'Password reset successfully' };
+  }
 }
+

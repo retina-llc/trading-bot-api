@@ -1,0 +1,33 @@
+# # BitMart API Keys
+# BITMART_API_KEY=ab2ff6c10d4c0386c590ae4d333d7ec5d8ec0e78
+# BITMART_API_SECRET=50ced6f0891b82557ff9e0ada8f4c1a9d6353b3fbca4c079cab24a780fa6c99c
+# BITMART_API_MEMO=Bitmart
+
+# # Monitoring API Keys (for additional monitoring exchange instance)
+# MONITORING_API_KEY=3a879cb0bface29c47e3006d4374f3d4b376677b
+# MONITORING_API_SECRET=7e53598478b77d68709113826e12f3e7e0b4b6ba72de79dee9fce712863fa91d
+# MONITORING_API_MEMO=Monitoring
+# # Logging Configuration (Optional, if applicable)
+# LOG_LEVEL=info
+
+# DB_HOST=localhost
+# DB_PORT=5432
+# DB_NAME=postgres
+# DB_USER=postgres
+# DB_PASSWORD=Matthew123$
+
+JWT_SECRET=Matthew123$
+
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USER=retina@ascarinet.com
+EMAIL_PASSWORD=uwoj ivuv tgja mezj
+
+DB_HOST=database-1.cluo4oe0ywzh.us-east-1.rds.amazonaws.com
+DB_PORT=5432
+DB_NAME=Trading-bot
+DB_USER=postgres
+DB_PASSWORD=Matthew123$
+DB_SSLMODE=verify-full
+DB_SSLROOTCERT=/Users/matthewcunninghm/Downloads/us-east-1-bundle.pem
+

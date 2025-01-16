@@ -94,4 +94,23 @@ export class UserService {
     this.logger.log(`User found: ${JSON.stringify(user)}`);
     return user;
   }
-}
+  async resetPassword(email: string, newPassword: string): Promise<boolean> {
+    this.logger.log(`UserService: Resetting password for email: ${email}`);
+    const user = await this.findByEmail(email);
+    if (!user) {
+      this.logger.error(`UserService: User not found for email: ${email}`);
+      throw new NotFoundException('User not found');
+    }
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+    const updatedUser = await this.userRepository.save(user);
+    this.logger.log(`UserService: Password reset successfully for user: ${JSON.stringify(updatedUser)}`);
+    // Optionally, send a confirmation email:
+    await this.emailService.sendEmail({
+      to: email,
+      subject: 'Your Password Has Been Reset',
+      text: 'Your password has been reset successfully. If you did not perform this action, please contact support immediately.',
+    });
+    return true;
+  }
+}  

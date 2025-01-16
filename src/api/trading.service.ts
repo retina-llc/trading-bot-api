@@ -10,7 +10,15 @@ import { UserRepository } from './user/user-repository';
 import { SymbolHelper } from './utils/symbol.helper'; // Ensure correct path
 
 const BITMART_API_URL = 'https://api-cloud.bitmart.com';
-
+interface UserTradeState {
+  purchasePrices: Record<string, { price: number; timestamp: number; quantity: number; sold?: boolean }>;
+  profitTarget: number;
+  accumulatedProfit: number;
+  startDayTimestamp: number;
+  payloadLogs: Record<string, any[]>;
+  monitorIntervals: Record<string, NodeJS.Timeout>;
+  activeMonitoringIntervals: Record<string, NodeJS.Timeout>;
+}
 @Injectable()
 export class TradingService {
   private payloadLogs: Record<string, any[]> = {};
@@ -22,6 +30,7 @@ export class TradingService {
   private skyrocketProfitMode: boolean = false;
   private skyrocketProfitTarget: number = 0;
   private activeMonitoringIntervals: Record<string, NodeJS.Timeout> = {};
+  private userTrades = new Map<number, UserTradeState>();
 
   constructor(private readonly userRepository: UserRepository) {}
 
@@ -142,7 +151,22 @@ export class TradingService {
       'Content-Type': 'application/json',
     };
   }
-
+  private getUserTradeState(userId: number): UserTradeState {
+    let state = this.userTrades.get(userId);
+    if (!state) {
+      state = {
+        purchasePrices: {},
+        profitTarget: 0,
+        accumulatedProfit: 0,
+        startDayTimestamp: Date.now(),
+        payloadLogs: {},
+        monitorIntervals: {},
+        activeMonitoringIntervals: {},
+      };
+      this.userTrades.set(userId, state);
+    }
+    return state;
+  }
   private async getMonitoringAuthHeaders(
     userId: number,
     endpoint: string,
@@ -163,6 +187,54 @@ export class TradingService {
       'Content-Type': 'application/json',
     };
   }
+  
+// Add this helper method inside your TradingService class
+private async ensureSellCompleted(
+  userId: number,
+  symbol: string,
+  expectedSoldQuantity: number
+): Promise<void> {
+  const logger = getUserLogger(userId);
+  let retries = 0;
+  const maxRetries = 3;
+  const valueThreshold = 1.0; // The threshold value in USD
+  
+  // Wait a few seconds before checking after the sell order.
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+
+  while (retries < maxRetries) {
+    try {
+      // Check the available quantity of the asset for the given symbol.
+      const remainingQuantity = await this.getAvailableQuantity(userId, symbol);
+      // Get the current market price for the symbol
+      const currentPrice = await this.fetchTicker(symbol);
+      // Calculate the dollar value of the remaining asset
+      const remainingValue = remainingQuantity * currentPrice;
+  
+      // If the remaining dollar value is less than $1.00, consider the sell complete.
+      if (remainingValue < valueThreshold) {
+        logger.info(`Sell confirmed for ${symbol}. Remaining value ($${remainingValue.toFixed(2)}) is below $${valueThreshold}.`);
+        return;
+      } else {
+        logger.warn(
+          `Sell order for ${symbol} not fully executed. Remaining value: $${remainingValue.toFixed(2)}. Reattempting sell...`
+        );
+        // Attempt to sell the remaining quantity
+        await this.placeOrder(userId, symbol, 'sell', remainingQuantity);
+      }
+    } catch (error) {
+      logger.error(
+        `Error during sell confirmation for ${symbol}: ${(error as Error).message}`
+      );
+    }
+    retries++;
+    // Wait before the next retry
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+  logger.error(
+    `Failed to fully execute sell order for ${symbol} after ${maxRetries} attempts.`
+  );
+}
 
   public getAccumulatedProfit(): number {
     return this.accumulatedProfit;
@@ -462,7 +534,7 @@ export class TradingService {
    * @param symbol - The trading symbol in "BASE_QUOTE" format (e.g., "PWC_USDT").
    * @param amount - The amount to invest.
    * @param rebuyPercentage - The percentage to rebuy on conditions.
-   * @param profitTarget - The target profit to achieve before stopping.
+   * @param profit   Target - The target profit to achieve before stopping.
    * @returns An object containing trade details.
    */
   public async startTrade(
@@ -563,18 +635,20 @@ export class TradingService {
     if (this.accumulatedProfit >= this.profitTarget) {
       console.log(`Profit target of ${this.profitTarget} reached. Selling and stopping trade.`);
       await this.placeOrder(userId, symbol, 'sell', quantity);
+      
+      // Ensure the sell actually went through (if not, reattempt the sell)
+      await this.ensureSellCompleted(userId, symbol, quantity);
   
-      // Preserve purchasePrices for monitoring after sale
+      // Mark trade as sold once the sell is confirmed
       this.purchasePrices[symbol] = {
         ...this.purchasePrices[symbol],
-        sold: true, // Mark as sold but keep data
+        sold: true,
+        quantity: 0,
       };
       this.stopTrade();
     }
   }
   
-  
-
   private isNewDay(): boolean {
     const oneDayInMillis = 24 * 60 * 60 * 1000;
     return (Date.now() - this.startDayTimestamp) >= oneDayInMillis;
@@ -593,15 +667,15 @@ export class TradingService {
     quantity: number,
     rebuyPercentage: number
   ) {
-    const logger = getUserLogger(userId); // Retrieve user-specific logger
-
+    const logger = getUserLogger(userId);
+    
     if (this.monitorIntervals[symbol]) {
       logger.info(`Clearing existing monitoring interval for ${symbol}.`);
       clearInterval(this.monitorIntervals[symbol]);
     }
-  
+    
     logger.info(`Starting continuous monitoring for ${symbol} with rebuyPercentage: ${rebuyPercentage}.`);
-
+  
     this.monitorIntervals[symbol] = setInterval(async () => {
       try {
         if (this.isNewDay()) {
@@ -609,74 +683,91 @@ export class TradingService {
           this.accumulatedProfit = 0;
           this.startDayTimestamp = Date.now();
         }
-
+    
         const currentPrice = await this.fetchTicker(symbol);
         logger.info(`Current price for ${symbol}: ${currentPrice}`);
-
+    
         const purchase = this.purchasePrices[symbol];
         if (!purchase) {
           logger.info(`Purchase price not found for symbol: ${symbol}`);
           return;
         }
-
+    
+        // Check residual value threshold before proceeding
+        // For example, if the current position value is less than $1, mark as sold.
+        const residualValue = purchase.quantity * currentPrice;
+        const minimumTradeValue = 1.0; // $1.00 threshold
+        if (residualValue < minimumTradeValue) {
+          logger.info(`Residual value (${residualValue.toFixed(2)} USDT) is below threshold. Marking ${symbol} as closed.`);
+          purchase.quantity = 0;
+          purchase.sold = true;
+          clearInterval(this.monitorIntervals[symbol]);
+          return;
+        }
+    
         const purchasePrice = purchase.price;
         const priceDrop = (purchasePrice - currentPrice) / purchasePrice;
         const profit = (currentPrice - purchasePrice) / purchasePrice;
-
+    
         logger.info(`Purchase price for ${symbol}: ${purchasePrice}`);
         logger.info(`Price drop for ${symbol}: ${(priceDrop * 100).toFixed(2)}%`);
         logger.info(`Current profit for ${symbol}: ${(profit * 100).toFixed(2)}%`);
-
-        // Handle price drop condition
-        if (priceDrop > 0.03) { // 0.4% drop
-          logger.info(`Price dropped by more than 0.4% for ${symbol}. Selling.`);
+    
+        if (priceDrop >= 0.08) {
+          logger.info(`Price dropped by 8% or more for ${symbol}. Selling.`);
           await this.placeOrder(userId, symbol, 'sell', quantity);
-          await this.checkAndHandleProfit(userId, symbol, quantity, currentPrice);
-      
-          // Update the purchasePrices entry instead of deleting it
-          this.purchasePrices[symbol] = {
-              ...this.purchasePrices[symbol],
-              price: currentPrice, // Update to the sell price
-              quantity: 0, // Quantity is now 0 after selling
-              sold: true, // Mark as sold
-          };
-      
-          logger.info(`Waiting for 15 seconds before starting monitorAfterSale for ${symbol}.`);
-          setTimeout(() => {
-              this.monitorAfterSale(userId, symbol, quantity, currentPrice, rebuyPercentage);
-          }, 15000); // 3 minutes delay
-      }
-      
-        // Handle profit condition
-        else if (profit >= 0.07) { // 2% profit
-          logger.info(`Profit of 7% or more for ${symbol}. Selling.`);
-          await this.placeOrder(userId, symbol, 'sell', quantity);
+          await this.ensureSellCompleted(userId, symbol, quantity);
           await this.checkAndHandleProfit(userId, symbol, quantity, currentPrice);
           this.purchasePrices[symbol] = {
             ...this.purchasePrices[symbol],
-            sold: true, // Mark the trade as sold but preserve data
+            price: currentPrice,
+            quantity: 0,
+            sold: true,
+          };
+        
+          logger.info(`Waiting for 15 seconds before starting monitorAfterSale for ${symbol}.`);
+          setTimeout(() => {
+            this.monitorAfterSale(userId, symbol, quantity, currentPrice, rebuyPercentage);
+          }, 15000);
+        } else if (profit >= 0.065) {
+          logger.info(`Profit of 6.5% or more for ${symbol}. Selling.`);
+          await this.placeOrder(userId, symbol, 'sell', quantity);
+          await this.ensureSellCompleted(userId, symbol, quantity);
+          await this.checkAndHandleProfit(userId, symbol, quantity, currentPrice);
+          this.purchasePrices[symbol] = {
+            ...this.purchasePrices[symbol],
+            sold: true,
           };
           logger.info(`Waiting for 15 seconds before starting monitorAfterSale for ${symbol}.`);
           setTimeout(() => {
             this.monitorAfterSale(userId, symbol, quantity, currentPrice, rebuyPercentage);
-          }, 15000); // 3 minutes delay
-        }        
-        // Handle accumulated profit target
-        else if (this.accumulatedProfit >= this.profitTarget) {
+          }, 15000);
+        } else if (profit >= 0.065) {
+          logger.info(`Profit of 6.5% or more for ${symbol}. Selling.`);
+          await this.placeOrder(userId, symbol, 'sell', quantity);
+          await this.checkAndHandleProfit(userId, symbol, quantity, currentPrice);
+          this.purchasePrices[symbol] = {
+            ...this.purchasePrices[symbol],
+            sold: true,
+          };
+          logger.info(`Waiting for 15 seconds before starting monitorAfterSale for ${symbol}.`);
+          setTimeout(() => {
+            this.monitorAfterSale(userId, symbol, quantity, currentPrice, rebuyPercentage);
+          }, 15000);
+        } else if (this.accumulatedProfit >= this.profitTarget) {
           logger.info(`Accumulated profit target reached for ${symbol}. Selling.`);
           await this.placeOrder(userId, symbol, 'sell', quantity);
           this.stopTrade();
-        }
-        // Handle skyrocketing profit condition
-        else if (Date.now() - purchase.timestamp <= 60000 && profit >= 0.05) { // 5% profit within 1 minute
+        } else if (Date.now() - purchase.timestamp <= 60000 && profit >= 0.05) {
           logger.info(`5% profit in 1 minute for ${symbol}. Waiting for further changes.`);
           await this.waitForSkyrocketingProfit(userId, symbol, quantity, rebuyPercentage);
         }
       } catch (error) {
         logger.error('Error checking price and selling: ' + (error as Error).message);
       }
-    }, 10000); // Check every 10 seconds
+    }, 10000);
   }
+  
 
   /**
    * Waits for skyrocketing profit conditions and handles selling.
@@ -911,10 +1002,10 @@ export class TradingService {
      * Retrieves the profit target.
      * @returns The profit target.
      */
-    public getProfitTarget(): number {
-      return this.profitTarget;
+    public getProfitTarget(userId: number): number {
+      const state = this.getUserTradeState(userId);
+      return state.profitTarget;
     }
-
     /**
      * Verifies if the user has an active subscription.
      * @param userEmail - The email of the user.
@@ -930,19 +1021,19 @@ export class TradingService {
      * Retrieves the current status of trading activities.
      * @returns An object containing status details.
      */
-    public getStatus(): Record<string, any> {
+    public getStatus(userId: number): Record<string, any> {
+      const state = this.getUserTradeState(userId);
       return {
-        activeTrades: Object.keys(this.purchasePrices).map((symbol) => ({
+        activeTrades: Object.keys(state.purchasePrices).map((symbol) => ({
           symbol,
-          monitoringStatus: this.purchasePrices[symbol]?.sold ? 'Monitoring After Sale' : 'Active',
+          monitoringStatus: state.purchasePrices[symbol]?.sold ? 'Monitoring After Sale' : 'Active',
         })),
-        purchasePrices: this.purchasePrices,
-        profitTarget: this.profitTarget,
-        accumulatedProfit: this.accumulatedProfit,
-        skyrocketProfitMode: this.skyrocketProfitMode,
-        activeMonitoringIntervals: Object.keys(this.activeMonitoringIntervals),
-        startDayTimestamp: new Date(this.startDayTimestamp).toISOString(),
-        payloadLogs: this.payloadLogs, // Include payload logs
+        purchasePrices: state.purchasePrices,
+        profitTarget: state.profitTarget,
+        accumulatedProfit: state.accumulatedProfit,
+        activeMonitoringIntervals: Object.keys(state.activeMonitoringIntervals),
+        startDayTimestamp: new Date(state.startDayTimestamp).toISOString(),
+        payloadLogs: state.payloadLogs,
       };
     }
       

@@ -12,6 +12,7 @@ import { RequestWithUser } from './request-user';
 import * as jwt from 'jsonwebtoken';
 import { JwtService } from '@nestjs/jwt';
 
+
 @Controller('trading')
 export class TradingController {
   constructor(
@@ -363,7 +364,7 @@ async stopTrade(@Req() req: RequestWithUser): Promise<any> {
       throw new HttpException('Failed to fetch ticker data', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
-
+  @UseGuards(AuthGuard)
   @Get('accumulated-profit')
   async getAccumulatedProfit(): Promise<any> {
     console.log('Received request to retrieve accumulated profit');
@@ -376,12 +377,17 @@ async stopTrade(@Req() req: RequestWithUser): Promise<any> {
       throw new HttpException('Failed to retrieve accumulated profit', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
-
+  @UseGuards(AuthGuard)
   @Get('profit-target')
-  async getProfitTarget(): Promise<any> {
+  async getProfitTarget(@Req() req: RequestWithUser): Promise<any> {
     console.log('Received request to retrieve profit target');
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
+    }
+    
     try {
-      const profitTarget = this.tradingService.getProfitTarget();
+      const profitTarget = this.tradingService.getProfitTarget(userId);
       console.log('Current Profit Target:', profitTarget);
       return { profitTarget };
     } catch (error) {
@@ -389,7 +395,6 @@ async stopTrade(@Req() req: RequestWithUser): Promise<any> {
       throw new HttpException('Failed to retrieve profit target', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
-
   @Get('top-gainers')
   async getTopGainers(): Promise<any> {
     console.log('Received request for top gainers');
@@ -589,9 +594,14 @@ async saveApiKeys(
       throw new HttpException('Failed to fetch API keys', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
+  @UseGuards(AuthGuard)
   @Get('status')
-  getStatus() {
-    return this.tradingService.getStatus();
+  getStatus(@Req() req: RequestWithUser): any {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
+    }
+    return this.tradingService.getStatus(userId);
   }
   @Post('delete-api-keys')
   async deleteApiKeys(@Req() req: Request): Promise<{ message: string }> {

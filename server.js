@@ -9,19 +9,13 @@ const PORT = process.env.PORT || 3000;
 // Middleware to parse JSON bodies
 app.use(bodyParser.json());
 
-// Enable CORS for all routes
-app.use(cors());
-
 // Serve static files from the "public" directory
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Endpoint to handle the start trade request
 app.post('/trading/start-trade', (req, res) => {
   const { symbol, amount, rebuyPercentage, profitTarget } = req.body;
-
-  // Implement your trade logic here
   console.log('Trade request received:', { symbol, amount, rebuyPercentage, profitTarget });
-
   res.json({ message: 'Trade started successfully', data: { symbol, amount, rebuyPercentage, profitTarget } });
 });
 

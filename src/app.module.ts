@@ -20,6 +20,9 @@ import { ContactUsController } from './api/email/contact-us';
 import { LoggerModule } from './api/logger.module';
 import * as fs from 'fs';
 import * as path from 'path';
+import { HealthModule } from './api/health.module';
+
+// Import the HealthModule. Ensure that you have created it under src/health/health.module.ts.
 
 @Module({
   imports: [
@@ -36,7 +39,7 @@ import * as path from 'path';
       useFactory: async (configService: ConfigService) => {
         // Retrieve SSL configuration from environment variables
         const sslMode = configService.get<string>('DB_SSLMODE');
-        const sslCertPath = configService.get<string>('DB_SSLROOTCERT') || path.resolve(__dirname, '../Downloads/us-east-1-bundle.pem');
+        const sslCertPath = configService.get<string>('DB_SSLROOTCERT') || process.env.SSL_CERT_PATH || path.resolve(__dirname, '../certs/us-east-1-bundle.pem');
 
         let sslOptions: boolean | { rejectUnauthorized: boolean; ca: string } = false;
 
@@ -107,6 +110,9 @@ import * as path from 'path';
     }),
     AuthModule,
     LoggerModule,
+
+    // 5. Import the HealthModule for the /health endpoint
+    HealthModule,
   ],
   controllers: [TradingController, SubscriptionController, ContactUsController],
   providers: [AIService, GeminiAIClient, SubscriptionService],

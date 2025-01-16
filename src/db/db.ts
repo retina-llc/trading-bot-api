@@ -6,7 +6,7 @@ import path from 'path';
 
 dotenv.config();
 
-const sslCertPath = path.resolve(__dirname, '../Downloads/us-east-1-bundle.pem');
+const sslCertPath = process.env.SSL_CERT_PATH || path.resolve(__dirname, '../certs/us-east-1-bundle.pem');
 
 // Define the sslOptions with a union type
 let sslOptions: boolean | { rejectUnauthorized: boolean; ca: string } = false;

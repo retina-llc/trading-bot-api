@@ -73,7 +73,7 @@ export class SubscriptionService {
    *  - Otherwise, send email about how much is missing
    */
   private async handlePartialPayment(senderAddress: string, amountInUSD: number): Promise<void> {
-    const requiredUsdAmount = 10; // $10 for subscription
+    const requiredUsdAmount = 30; // $10 for subscription
 
     try {
       const user = await this.userRepository.findUserByWallet(senderAddress);
@@ -231,7 +231,7 @@ export class SubscriptionService {
         this.logger.log(`Sending pre-expiry notification to user: ${user.email}`);
 
         // Calculate how much ASC is needed to renew ($10 USD worth)
-        const requiredUsdAmount = 10;
+        const requiredUsdAmount = 30;
         const requiredAsc = await this.getAscAmountFromUsd(requiredUsdAmount);
 
         // Prepare email details
