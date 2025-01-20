@@ -628,27 +628,37 @@ private async ensureSellCompleted(
     quantity: number,
     sellPrice: number
   ): Promise<void> {
+    const logger = getUserLogger(userId);
     const profit = await this.calculateProfit(symbol, quantity, sellPrice);
+  
     this.accumulatedProfit += profit;
-    console.log(`Accumulated Profit: ${this.accumulatedProfit}`);
+    logger.info(`Accumulated Profit: ${this.accumulatedProfit}`);
   
     if (this.accumulatedProfit >= this.profitTarget) {
-      console.log(`Profit target of ${this.profitTarget} reached. Selling and stopping trade.`);
-      await this.placeOrder(userId, symbol, 'sell', quantity);
+      logger.info(`Profit target of ${this.profitTarget} reached for ${symbol}. Initiating stop trade process.`);
       
-      // Ensure the sell actually went through (if not, reattempt the sell)
+      // Call stopTrade to stop all active trading activities
+      this.stopTrade();
+  
+      // Place the sell order for the entire quantity
+      logger.info(`Placing sell order for ${symbol} with quantity: ${quantity}.`);
+      await this.placeOrder(userId, symbol, 'sell', quantity);
+  
+      // Call ensureSellCompleted to validate that the remaining value is below the threshold
+      logger.info(`Ensuring sell is completed for ${symbol}.`);
       await this.ensureSellCompleted(userId, symbol, quantity);
   
-      // Mark trade as sold once the sell is confirmed
+      // Mark the trade as sold in the purchase prices record
       this.purchasePrices[symbol] = {
         ...this.purchasePrices[symbol],
         sold: true,
         quantity: 0,
       };
-      this.stopTrade();
+  
+      logger.info(`Trading stopped after reaching profit target for ${symbol}.`);
     }
   }
-  
+    
   private isNewDay(): boolean {
     const oneDayInMillis = 24 * 60 * 60 * 1000;
     return (Date.now() - this.startDayTimestamp) >= oneDayInMillis;
