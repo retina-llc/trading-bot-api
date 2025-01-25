@@ -2,7 +2,7 @@
   "name": "trading-bot",
   "version": "1.0.0",
   "description": "Trading bot for BitMart",
-"main": "dist/main.js",
+  "main": "dist/main.js",
   "scripts": {
     "start": "nest start",
     "start:prod": "node dist/main.js",

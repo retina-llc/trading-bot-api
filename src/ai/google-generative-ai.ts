@@ -1,6 +1,5 @@
-
-import axios from 'axios';
-import { analyzeFluctuations, getHistoricalData } from '../api/api';
+import axios from "axios";
+import { analyzeFluctuations, getHistoricalData } from "../api/api";
 
 export class GenerativeModel {
   private apiKey: string;
@@ -11,26 +10,32 @@ export class GenerativeModel {
     this.model = model;
   }
 
-  public async generateContent(prompt: string): Promise<{ response: { text: () => string } }> {
+  public async generateContent(
+    prompt: string,
+  ): Promise<{ response: { text: () => string } }> {
     try {
-      const response = await axios.post('https://api.gemini.com/v1/generate', {
-        model: this.model,
-        prompt: prompt
-      }, {
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const response = await axios.post(
+        "https://api.gemini.com/v1/generate",
+        {
+          model: this.model,
+          prompt: prompt,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
+          },
+        },
+      );
 
       return {
         response: {
-          text: () => response.data.generated_text
-        }
+          text: () => response.data.generated_text,
+        },
       };
     } catch (error) {
-      console.error('Error generating content:', error);
-      throw new Error('Failed to generate content');
+      console.error("Error generating content:", error);
+      throw new Error("Failed to generate content");
     }
   }
 
@@ -41,34 +46,41 @@ export class GenerativeModel {
       const recommendation = analyzeFluctuations(historicalData);
       return recommendation;
     } catch (error) {
-      console.error('Error predicting content:', error);
-      throw new Error('Failed to predict content');
+      console.error("Error predicting content:", error);
+      throw new Error("Failed to predict content");
     }
   }
 
   public async startChat(): Promise<any> {
     try {
-      const response = await axios.post('https://api.gemini.com/v1/chat/start', {}, {
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const response = await axios.post(
+        "https://api.gemini.com/v1/chat/start",
+        {},
+        {
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
+          },
+        },
+      );
 
       return {
         getHistory: async () => {
-          const historyResponse = await axios.get('https://api.gemini.com/v1/chat/history', {
-            headers: {
-              'Authorization': `Bearer ${this.apiKey}`,
-              'Content-Type': 'application/json'
-            }
-          });
+          const historyResponse = await axios.get(
+            "https://api.gemini.com/v1/chat/history",
+            {
+              headers: {
+                Authorization: `Bearer ${this.apiKey}`,
+                "Content-Type": "application/json",
+              },
+            },
+          );
           return historyResponse.data;
-        }
+        },
       };
     } catch (error) {
-      console.error('Error starting chat session:', error);
-      throw new Error('Failed to start chat session');
+      console.error("Error starting chat session:", error);
+      throw new Error("Failed to start chat session");
     }
   }
 }

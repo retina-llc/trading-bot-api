@@ -11,14 +11,6 @@
     "typeRoots": ["./node_modules/@types", "./src/types"],
     "outDir": "./dist"
   },
-  "include": [
-    "src/**/*",
-    "testbot.ts",
-    "server.js",
-    "types/**/*.d.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "**/*.spec.ts"
-  ]
+  "include": ["src/**/*", "testbot.ts", "server.js", "types/**/*.d.ts"],
+  "exclude": ["node_modules", "**/*.spec.ts"]
 }

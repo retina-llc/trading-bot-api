@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import { UserRepository } from './user/user-repository';
+import { Injectable } from "@nestjs/common";
+import { UserRepository } from "./user/user-repository";
 
 @Injectable()
 export class ApiService {
@@ -9,7 +9,7 @@ export class ApiService {
     const user = await this.userRepository.findOne({ where: { id: userId } });
 
     if (!user) {
-      throw new Error('User not found');
+      throw new Error("User not found");
     }
 
     user.apiKeys = {
@@ -23,7 +23,7 @@ export class ApiService {
     const user = await this.userRepository.findOne({ where: { id: userId } });
 
     if (!user) {
-      throw new Error('User not found');
+      throw new Error("User not found");
     }
 
     return user.apiKeys;
@@ -33,7 +33,7 @@ export class ApiService {
     const user = await this.userRepository.findOne({ where: { id: userId } });
 
     if (!user) {
-      throw new Error('User not found');
+      throw new Error("User not found");
     }
 
     user.apiKeys = {}; // Clear the apiKeys field

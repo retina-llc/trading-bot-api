@@ -1,11 +1,11 @@
 // src/subscription/subscription.service.ts
 
-import { Injectable, Logger } from '@nestjs/common';
-import { JsonRpcProvider, Contract, formatUnits } from 'ethers';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { UserRepository } from '../user/user-repository';
-import { EmailService } from '../email/email-service';
-import { User } from '../user/user-entity';
+import { Injectable, Logger } from "@nestjs/common";
+import { JsonRpcProvider, Contract, formatUnits } from "ethers";
+import { Cron, CronExpression } from "@nestjs/schedule";
+import { UserRepository } from "../user/user-repository";
+import { EmailService } from "../email/email-service";
+import { User } from "../user/user-entity";
 
 @Injectable()
 export class SubscriptionService {
@@ -16,13 +16,14 @@ export class SubscriptionService {
   private ascABI: string[];
 
   // Uniswap V3 Subgraph endpoint
-  private uniswapV3Endpoint = 'https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3';
+  private uniswapV3Endpoint =
+    "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3";
   // The V3 pool for ASC–USDT on mainnet
-  private ascUsdtPoolAddress = '0x9DF8f2c89E04C25B6c3636E718dd62d5D16230d9';
+  private ascUsdtPoolAddress = "0x9DF8f2c89E04C25B6c3636E718dd62d5D16230d9";
   private uniswapV3PoolABI = [
-    'function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool)',
-    'function token0() external view returns (address)',
-    'function token1() external view returns (address)',
+    "function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool)",
+    "function token0() external view returns (address)",
+    "function token1() external view returns (address)",
   ];
 
   constructor(
@@ -30,30 +31,43 @@ export class SubscriptionService {
     private readonly emailService: EmailService,
   ) {
     // Initialize Ethereum mainnet provider
-    this.provider = new JsonRpcProvider(process.env.ETHEREUM_RPC_URL || 'https://mainnet.infura.io/v3/9de0180f470d430485e9963b80d203f6');
+    this.provider = new JsonRpcProvider(
+      process.env.ETHEREUM_RPC_URL ||
+        "https://mainnet.infura.io/v3/9de0180f470d430485e9963b80d203f6",
+    );
 
     // Wallet + ASC addresses
-    this.walletAddress = process.env.ASC_WALLET_ADDRESS || '0x121fec926152A209e8f20f78d875335402C1bA98';
-    this.ascContractAddress = process.env.ASC_CONTRACT_ADDRESS || '0x2B00F09C8958622a89A29Fb23fAA4e405Dfd9bB6';
+    this.walletAddress =
+      process.env.ASC_WALLET_ADDRESS ||
+      "0x121fec926152A209e8f20f78d875335402C1bA98";
+    this.ascContractAddress =
+      process.env.ASC_CONTRACT_ADDRESS ||
+      "0x2B00F09C8958622a89A29Fb23fAA4e405Dfd9bB6";
 
     // Standard ERC-20 Transfer event ABI
     this.ascABI = [
-      'event Transfer(address indexed from, address indexed to, uint256 value)',
+      "event Transfer(address indexed from, address indexed to, uint256 value)",
     ];
   }
 
   // ========== 1) Listen for ASC transfers on-chain ==========
   async startListening(): Promise<void> {
-    this.logger.log('SubscriptionService: Listening for ASC transfers...');
+    this.logger.log("SubscriptionService: Listening for ASC transfers...");
 
-    const contract = new Contract(this.ascContractAddress, this.ascABI, this.provider);
+    const contract = new Contract(
+      this.ascContractAddress,
+      this.ascABI,
+      this.provider,
+    );
 
-    contract.on('Transfer', async (from: string, to: string, value: bigint) => {
+    contract.on("Transfer", async (from: string, to: string, value: bigint) => {
       // Check if ASC was sent to our designated wallet
       if (to.toLowerCase() === this.walletAddress.toLowerCase()) {
         // Convert BigInt to decimal string (ASC typically 18 decimals)
         const ascAmount = parseFloat(formatUnits(value, 18));
-        this.logger.log(`Received ASC transfer from ${from}. Amount: ${ascAmount}`);
+        this.logger.log(
+          `Received ASC transfer from ${from}. Amount: ${ascAmount}`,
+        );
 
         // Convert ASC amount to approximate USD via Uniswap V3
         const amountInUSD = await this.getAscValueInUSD(ascAmount);
@@ -72,26 +86,39 @@ export class SubscriptionService {
    *  - If partial_usd_balance >= $10, grant subscription
    *  - Otherwise, send email about how much is missing
    */
-  private async handlePartialPayment(senderAddress: string, amountInUSD: number): Promise<void> {
+  private async handlePartialPayment(
+    senderAddress: string,
+    amountInUSD: number,
+  ): Promise<void> {
     const requiredUsdAmount = 30; // $10 for subscription
 
     try {
       const user = await this.userRepository.findUserByWallet(senderAddress);
       if (!user) {
-        this.logger.warn(`No user found with wallet ${senderAddress}. Ignoring payment.`);
+        this.logger.warn(
+          `No user found with wallet ${senderAddress}. Ignoring payment.`,
+        );
         return;
       }
 
       // Check if user has an active subscription
-      if (user.has_subscription && user.subscription_expiry && user.subscription_expiry > new Date()) {
-        this.logger.log(`User ${user.email} is already subscribed. Payment ignored.`);
+      if (
+        user.has_subscription &&
+        user.subscription_expiry &&
+        user.subscription_expiry > new Date()
+      ) {
+        this.logger.log(
+          `User ${user.email} is already subscribed. Payment ignored.`,
+        );
         return;
       }
 
       // Accumulate partial balance
       const oldBalance = Number(user.partial_usd_balance) || 0;
       const newBalance = oldBalance + amountInUSD;
-      this.logger.log(`User ${user.email} partial balance old: $${oldBalance}, adding: $${amountInUSD}, new: $${newBalance}`);
+      this.logger.log(
+        `User ${user.email} partial balance old: $${oldBalance}, adding: $${amountInUSD}, new: $${newBalance}`,
+      );
 
       if (newBalance >= requiredUsdAmount) {
         // Sufficient credit to renew subscription
@@ -108,7 +135,11 @@ export class SubscriptionService {
         // Notify user about remaining credit
         if (remainingUsd > 0) {
           const remainingAsc = await this.getAscAmountFromUsd(remainingUsd);
-          await this.emailService.sendCreditRemainingEmail(user.email, remainingUsd, remainingAsc);
+          await this.emailService.sendCreditRemainingEmail(
+            user.email,
+            remainingUsd,
+            remainingAsc,
+          );
         }
       } else {
         // Insufficient credit, store as partial payment and notify user
@@ -118,10 +149,15 @@ export class SubscriptionService {
         const missingUsd = requiredUsdAmount - newBalance;
         const missingAsc = await this.getAscAmountFromUsd(missingUsd);
 
-        await this.emailService.sendPartialPaymentEmail(user.email, newBalance, missingUsd, missingAsc);
+        await this.emailService.sendPartialPaymentEmail(
+          user.email,
+          newBalance,
+          missingUsd,
+          missingAsc,
+        );
       }
     } catch (err) {
-      this.logger.error('Error handling partial payment:', err);
+      this.logger.error("Error handling partial payment:", err);
     }
   }
 
@@ -142,12 +178,12 @@ export class SubscriptionService {
     try {
       const priceAscInUsd = await this.getAscValueInUSD(1);
       if (priceAscInUsd === 0) {
-        throw new Error('ASC price in USD is zero.');
+        throw new Error("ASC price in USD is zero.");
       }
       const ascAmount = usdAmount / priceAscInUsd;
       return ascAmount;
     } catch (error) {
-      this.logger.error('Error calculating ASC amount from USD:', error);
+      this.logger.error("Error calculating ASC amount from USD:", error);
       return 0;
     }
   }
@@ -155,7 +191,11 @@ export class SubscriptionService {
   // ========== 2) Get ASC Price in USD from Uniswap V3 ==========
   public async getAscValueInUSD(ascAmount: number): Promise<number> {
     try {
-      const poolContract = new Contract(this.ascUsdtPoolAddress, this.uniswapV3PoolABI, this.provider);
+      const poolContract = new Contract(
+        this.ascUsdtPoolAddress,
+        this.uniswapV3PoolABI,
+        this.provider,
+      );
       const token0 = (await poolContract.token0()).toLowerCase();
       const token1 = (await poolContract.token1()).toLowerCase();
 
@@ -167,8 +207,8 @@ export class SubscriptionService {
 
       // Convert BigInt
       const sqrtPrice = BigInt(sqrtPriceX96.toString());
-      const Q96 = 1n << 96n;    // 2^96
-      const Q192 = 1n << 192n;  // 2^192
+      const Q96 = 1n << 96n; // 2^96
+      const Q192 = 1n << 192n; // 2^192
 
       const numerator = sqrtPrice * sqrtPrice; // sqrtPrice^2
       const denominator = Q192;
@@ -190,7 +230,7 @@ export class SubscriptionService {
       const totalInUsdt = ascAmount * priceAscInUsdt;
       return totalInUsdt;
     } catch (error) {
-      this.logger.error('Error reading slot0 from Uniswap V3 pool:', error);
+      this.logger.error("Error reading slot0 from Uniswap V3 pool:", error);
       return 0;
     }
   }
@@ -205,19 +245,29 @@ export class SubscriptionService {
       user.has_subscription = true;
       user.subscription_expiry = subscriptionExpiry;
       await this.userRepository.save(user);
-      this.logger.log(`Subscription granted to user: ${user.email}, expires on: ${subscriptionExpiry}`);
+      this.logger.log(
+        `Subscription granted to user: ${user.email}, expires on: ${subscriptionExpiry}`,
+      );
 
       // Send subscription confirmation email
-      await this.emailService.sendSubscriptionRenewedEmail(user.email, subscriptionExpiry, 0, 0);
+      await this.emailService.sendSubscriptionRenewedEmail(
+        user.email,
+        subscriptionExpiry,
+        0,
+        0,
+      );
     } catch (error) {
-      this.logger.error('Error granting subscription:', (error as Error).message);
+      this.logger.error(
+        "Error granting subscription:",
+        (error as Error).message,
+      );
     }
   }
 
   // ========== 4) Scheduled Task to Handle Pre-Expiry Notifications ==========
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async handlePreExpiryNotifications(): Promise<void> {
-    this.logger.log('Running pre-expiry notification check.');
+    this.logger.log("Running pre-expiry notification check.");
 
     try {
       const targetDate = new Date();
@@ -225,10 +275,13 @@ export class SubscriptionService {
       targetDate.setHours(0, 0, 0, 0); // Start of the day
 
       // Find users whose subscription expires exactly 3 days from now
-      const preExpiryUsers = await this.userRepository.findSubscriptionsExpiringOn(targetDate);
+      const preExpiryUsers =
+        await this.userRepository.findSubscriptionsExpiringOn(targetDate);
 
       for (const user of preExpiryUsers) {
-        this.logger.log(`Sending pre-expiry notification to user: ${user.email}`);
+        this.logger.log(
+          `Sending pre-expiry notification to user: ${user.email}`,
+        );
 
         // Calculate how much ASC is needed to renew ($10 USD worth)
         const requiredUsdAmount = 30;
@@ -236,11 +289,14 @@ export class SubscriptionService {
 
         // Prepare email details
         const currentCreditUsd = Number(user.partial_usd_balance) || 0;
-        const currentCreditAsc = await this.getAscAmountFromUsd(currentCreditUsd);
+        const currentCreditAsc =
+          await this.getAscAmountFromUsd(currentCreditUsd);
 
         // **Runtime Check:** Ensure subscription_expiry is not null
         if (!user.subscription_expiry) {
-          this.logger.warn(`User ${user.email} has no subscription expiry date. Skipping email.`);
+          this.logger.warn(
+            `User ${user.email} has no subscription expiry date. Skipping email.`,
+          );
           continue; // Skip sending email for this user
         }
 
@@ -251,28 +307,33 @@ export class SubscriptionService {
           currentCreditUsd,
           currentCreditAsc,
           requiredUsdAmount,
-          requiredAsc
+          requiredAsc,
         );
       }
     } catch (error) {
-      this.logger.error('Error during pre-expiry notification check:', error);
+      this.logger.error("Error during pre-expiry notification check:", error);
     }
   }
 
   // ========== 5) Scheduled Task to Handle Subscription Renewals ==========
   @Cron(CronExpression.EVERY_DAY_AT_1AM)
   async handleSubscriptionRenewals(): Promise<void> {
-    this.logger.log('Running subscription renewal check.');
+    this.logger.log("Running subscription renewal check.");
 
     try {
       const targetDate = new Date();
       targetDate.setHours(0, 0, 0, 0); // Today
 
       // Find users whose subscription expired on or before today
-      const expiredUsers = await this.userRepository.findSubscriptionsExpiredOnOrBefore(targetDate);
+      const expiredUsers =
+        await this.userRepository.findSubscriptionsExpiredOnOrBefore(
+          targetDate,
+        );
 
       for (const user of expiredUsers) {
-        this.logger.log(`Processing renewal for expired subscription of user: ${user.email}`);
+        this.logger.log(
+          `Processing renewal for expired subscription of user: ${user.email}`,
+        );
 
         const requiredUsdAmount = 10;
         const availableCredit = Number(user.partial_usd_balance) || 0;
@@ -288,7 +349,9 @@ export class SubscriptionService {
 
           // **Runtime Check:** Ensure subscription_expiry is not null
           if (!user.subscription_expiry) {
-            this.logger.warn(`User ${user.email} has no subscription expiry date after renewal. Skipping email.`);
+            this.logger.warn(
+              `User ${user.email} has no subscription expiry date after renewal. Skipping email.`,
+            );
             continue; // Skip sending email for this user
           }
 
@@ -297,7 +360,7 @@ export class SubscriptionService {
             user.email,
             user.subscription_expiry, // Type: Date | null -> Date (guaranteed not null)
             remainingUsd,
-            await this.getAscAmountFromUsd(remainingUsd)
+            await this.getAscAmountFromUsd(remainingUsd),
           );
 
           this.logger.log(`Subscription renewed for user: ${user.email}`);
@@ -313,14 +376,16 @@ export class SubscriptionService {
           await this.emailService.sendSubscriptionDeactivatedEmail(
             user.email,
             missingUsd,
-            missingAsc
+            missingAsc,
           );
 
-          this.logger.log(`Subscription deactivated for user: ${user.email} due to insufficient credits.`);
+          this.logger.log(
+            `Subscription deactivated for user: ${user.email} due to insufficient credits.`,
+          );
         }
       }
     } catch (error) {
-      this.logger.error('Error during subscription renewal check:', error);
+      this.logger.error("Error during subscription renewal check:", error);
     }
   }
 }

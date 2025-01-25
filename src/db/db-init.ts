@@ -1,7 +1,7 @@
-import { connectDB, disconnectDB } from './db';
+import { connectDB, disconnectDB } from "./db";
 
 const createUsersTable = async (): Promise<void> => {
-    const query = `
+  const query = `
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             email VARCHAR(255) UNIQUE NOT NULL,
@@ -11,14 +11,14 @@ const createUsersTable = async (): Promise<void> => {
         );
     `;
 
-    try {
-        await connectDB();
-        console.log('Users table created successfully');
-    } catch (error) {
-        console.error('Error creating users table:', error);
-    } finally {
-        await disconnectDB();
-    }
+  try {
+    await connectDB();
+    console.log("Users table created successfully");
+  } catch (error) {
+    console.error("Error creating users table:", error);
+  } finally {
+    await disconnectDB();
+  }
 };
 
 createUsersTable();

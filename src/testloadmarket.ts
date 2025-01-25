@@ -1,6 +1,6 @@
 // testLoadMarkets.ts
 
-import ccxt from 'ccxt';
+import ccxt from "ccxt";
 
 (async () => {
   const exchange = new ccxt.bitmart({
@@ -11,7 +11,7 @@ import ccxt from 'ccxt';
     await exchange.loadMarkets();
     console.log(`Total markets loaded: ${exchange.symbols.length}`);
 
-    const testSymbol = 'PWC_USDT';
+    const testSymbol = "PWC_USDT";
     if (exchange.symbols.includes(testSymbol)) {
       console.log(`Success: ${testSymbol} is available.`);
     } else {

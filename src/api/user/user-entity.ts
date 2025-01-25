@@ -1,6 +1,6 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column } from "typeorm";
 
-@Entity('users')
+@Entity("users")
 export class User {
   @PrimaryGeneratedColumn()
   id!: number;
@@ -11,29 +11,27 @@ export class User {
   @Column()
   password!: string;
 
-  @Column({ type: 'varchar', nullable: true })
+  @Column({ type: "varchar", nullable: true })
   wallet_address!: string | null;
 
-  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  @Column({ type: "timestamp", default: () => "CURRENT_TIMESTAMP" })
   created_at!: Date;
 
-  @Column({ type: 'boolean', default: false })
+  @Column({ type: "boolean", default: false })
   has_subscription!: boolean;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   subscription_expiry!: Date | null; // New field for subscription expiry
 
-  @Column({ type: 'jsonb', default: {} })
-apiKeys!: Partial<{
-  bitmartApiKey: string;
-  bitmartApiSecret: string;
-  bitmartApiMemo: string;
-  monitoringApiKey: string;
-  monitoringApiSecret: string;
-  monitoringApiMemo: string;
-}> | null;
-@Column('decimal', { precision: 10, scale: 2, default: 0 })
-partial_usd_balance: number = 0;
-
-
+  @Column({ type: "jsonb", default: {} })
+  apiKeys!: Partial<{
+    bitmartApiKey: string;
+    bitmartApiSecret: string;
+    bitmartApiMemo: string;
+    monitoringApiKey: string;
+    monitoringApiSecret: string;
+    monitoringApiMemo: string;
+  }> | null;
+  @Column("decimal", { precision: 10, scale: 2, default: 0 })
+  partial_usd_balance: number = 0;
 }

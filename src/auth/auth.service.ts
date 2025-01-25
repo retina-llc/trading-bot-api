@@ -1,7 +1,7 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import * as bcrypt from 'bcrypt';
-import { UserService } from '../api/user/user-service';
+import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { JwtService } from "@nestjs/jwt";
+import * as bcrypt from "bcrypt";
+import { UserService } from "../api/user/user-service";
 
 @Injectable()
 export class AuthService {
@@ -13,7 +13,7 @@ export class AuthService {
   // Validate user credentials
   async validateUser(email: string, pass: string): Promise<any> {
     const user = await this.userService.findByEmail(email);
-    if (user && await bcrypt.compare(pass, user.password)) {
+    if (user && (await bcrypt.compare(pass, user.password))) {
       const { password, ...result } = user; // Exclude password from the result
       return result;
     }
@@ -27,12 +27,12 @@ export class AuthService {
       email: user.email,
     };
 
-    console.log('[AuthService] Signing JWT for user:', user.email);
+    console.log("[AuthService] Signing JWT for user:", user.email);
 
     return {
       access_token: this.jwtService.sign(payload, {
-        secret: process.env.JWT_SECRET || 'defaultSecretKey', // Ensure the secret matches your environment
-        expiresIn: '1h', // Optional: Set token expiration time
+        secret: process.env.JWT_SECRET || "defaultSecretKey", // Ensure the secret matches your environment
+        expiresIn: "1h", // Optional: Set token expiration time
       }),
     };
   }

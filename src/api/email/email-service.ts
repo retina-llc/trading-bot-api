@@ -1,7 +1,7 @@
 // src/email/email-service.ts
 
-import { Injectable, Logger } from '@nestjs/common';
-import * as nodemailer from 'nodemailer';
+import { Injectable, Logger } from "@nestjs/common";
+import * as nodemailer from "nodemailer";
 
 @Injectable()
 export class EmailService {
@@ -11,7 +11,7 @@ export class EmailService {
   constructor() {
     this.transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
-      port: parseInt(process.env.EMAIL_PORT || '587', 10),
+      port: parseInt(process.env.EMAIL_PORT || "587", 10),
       secure: false, // true for 465, false for other ports
       auth: {
         user: process.env.EMAIL_USER,
@@ -27,7 +27,7 @@ export class EmailService {
     const mailOptions = {
       from: '"Ascari Bot" <no-reply@ascaritradingbot.com>',
       to,
-      subject: 'Welcome to Ascari Trading Bot!',
+      subject: "Welcome to Ascari Trading Bot!",
       html: this.getWelcomeTemplate(),
     };
 
@@ -36,8 +36,11 @@ export class EmailService {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(`Welcome email sent successfully to: ${to}`);
     } catch (error) {
-      this.logger.error(`Error sending welcome email to ${to}:`, (error as Error).message);
-      throw new Error('Failed to send welcome email');
+      this.logger.error(
+        `Error sending welcome email to ${to}:`,
+        (error as Error).message,
+      );
+      throw new Error("Failed to send welcome email");
     }
   }
 
@@ -48,17 +51,22 @@ export class EmailService {
     const mailOptions = {
       from: '"Ascari Trading Bot" <no-reply@ascaritradingbot.com>',
       to,
-      subject: 'Subscription Confirmation - Ascari Trading Bot',
+      subject: "Subscription Confirmation - Ascari Trading Bot",
       html: this.getSubscriptionTemplate(expiryDate),
     };
 
     try {
       this.logger.log(`Sending subscription confirmation email to: ${to}`);
       await this.transporter.sendMail(mailOptions);
-      this.logger.log(`Subscription confirmation email sent successfully to: ${to}`);
+      this.logger.log(
+        `Subscription confirmation email sent successfully to: ${to}`,
+      );
     } catch (error) {
-      this.logger.error(`Error sending subscription email to ${to}:`, (error as Error).message);
-      throw new Error('Failed to send subscription email');
+      this.logger.error(
+        `Error sending subscription email to ${to}:`,
+        (error as Error).message,
+      );
+      throw new Error("Failed to send subscription email");
     }
   }
 
@@ -69,10 +77,14 @@ export class EmailService {
     to: string,
     currentBalanceUsd: number,
     missingAmountUsd: number,
-    missingAsc: number
+    missingAsc: number,
   ): Promise<void> {
-    const subject = 'Partial Payment Received - Ascari Trading Bot';
-    const mailHtml = this.getPartialPaymentTemplate(currentBalanceUsd, missingAmountUsd, missingAsc);
+    const subject = "Partial Payment Received - Ascari Trading Bot";
+    const mailHtml = this.getPartialPaymentTemplate(
+      currentBalanceUsd,
+      missingAmountUsd,
+      missingAsc,
+    );
 
     const mailOptions = {
       from: '"Ascari Trading Bot" <no-reply@ascaritradingbot.com>',
@@ -86,8 +98,11 @@ export class EmailService {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(`Partial payment email sent successfully to: ${to}`);
     } catch (error) {
-      this.logger.error(`Error sending partial payment email to ${to}:`, (error as Error).message);
-      throw new Error('Failed to send partial payment email');
+      this.logger.error(
+        `Error sending partial payment email to ${to}:`,
+        (error as Error).message,
+      );
+      throw new Error("Failed to send partial payment email");
     }
   }
 
@@ -100,23 +115,34 @@ export class EmailService {
     currentCreditUsd: number,
     currentCreditAsc: number,
     requiredUsd: number,
-    requiredAsc: number
+    requiredAsc: number,
   ): Promise<void> {
-    const formattedExpiry = subscriptionExpiry.toISOString().split('T')[0];
+    const formattedExpiry = subscriptionExpiry.toISOString().split("T")[0];
     const mailOptions = {
       from: '"Ascari Trading Bot" <no-reply@ascaritradingbot.com>',
       to,
-      subject: 'Your Subscription is About to Expire',
-      html: this.getPreExpiryTemplate(formattedExpiry, currentCreditUsd, currentCreditAsc, requiredUsd, requiredAsc),
+      subject: "Your Subscription is About to Expire",
+      html: this.getPreExpiryTemplate(
+        formattedExpiry,
+        currentCreditUsd,
+        currentCreditAsc,
+        requiredUsd,
+        requiredAsc,
+      ),
     };
 
     try {
       this.logger.log(`Sending pre-expiry notification email to: ${to}`);
       await this.transporter.sendMail(mailOptions);
-      this.logger.log(`Pre-expiry notification email sent successfully to: ${to}`);
+      this.logger.log(
+        `Pre-expiry notification email sent successfully to: ${to}`,
+      );
     } catch (error) {
-      this.logger.error(`Error sending pre-expiry notification email to ${to}:`, (error as Error).message);
-      throw new Error('Failed to send pre-expiry notification email');
+      this.logger.error(
+        `Error sending pre-expiry notification email to ${to}:`,
+        (error as Error).message,
+      );
+      throw new Error("Failed to send pre-expiry notification email");
     }
   }
 
@@ -127,14 +153,18 @@ export class EmailService {
     to: string,
     newExpiry: Date,
     remainingUsd: number,
-    remainingAsc: number
+    remainingAsc: number,
   ): Promise<void> {
-    const formattedExpiry = newExpiry.toISOString().split('T')[0];
+    const formattedExpiry = newExpiry.toISOString().split("T")[0];
     const mailOptions = {
       from: '"Ascari Trading Bot" <no-reply@ascaritradingbot.com>',
       to,
-      subject: 'Your Subscription Has Been Renewed',
-      html: this.getSubscriptionRenewedTemplate(formattedExpiry, remainingUsd, remainingAsc),
+      subject: "Your Subscription Has Been Renewed",
+      html: this.getSubscriptionRenewedTemplate(
+        formattedExpiry,
+        remainingUsd,
+        remainingAsc,
+      ),
     };
 
     try {
@@ -142,8 +172,11 @@ export class EmailService {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(`Subscription renewed email sent successfully to: ${to}`);
     } catch (error) {
-      this.logger.error(`Error sending subscription renewed email to ${to}:`, (error as Error).message);
-      throw new Error('Failed to send subscription renewed email');
+      this.logger.error(
+        `Error sending subscription renewed email to ${to}:`,
+        (error as Error).message,
+      );
+      throw new Error("Failed to send subscription renewed email");
     }
   }
 
@@ -153,22 +186,27 @@ export class EmailService {
   async sendSubscriptionDeactivatedEmail(
     to: string,
     missingUsd: number,
-    missingAsc: number
+    missingAsc: number,
   ): Promise<void> {
     const mailOptions = {
       from: '"Ascari Trading Bot" <no-reply@ascaritradingbot.com>',
       to,
-      subject: 'Your Subscription Has Been Deactivated',
+      subject: "Your Subscription Has Been Deactivated",
       html: this.getSubscriptionDeactivatedTemplate(missingUsd, missingAsc),
     };
 
     try {
       this.logger.log(`Sending subscription deactivated email to: ${to}`);
       await this.transporter.sendMail(mailOptions);
-      this.logger.log(`Subscription deactivated email sent successfully to: ${to}`);
+      this.logger.log(
+        `Subscription deactivated email sent successfully to: ${to}`,
+      );
     } catch (error) {
-      this.logger.error(`Error sending subscription deactivated email to ${to}:`, (error as Error).message);
-      throw new Error('Failed to send subscription deactivated email');
+      this.logger.error(
+        `Error sending subscription deactivated email to ${to}:`,
+        (error as Error).message,
+      );
+      throw new Error("Failed to send subscription deactivated email");
     }
   }
 
@@ -178,12 +216,12 @@ export class EmailService {
   async sendCreditRemainingEmail(
     to: string,
     remainingUsd: number,
-    remainingAsc: number
+    remainingAsc: number,
   ): Promise<void> {
     const mailOptions = {
       from: '"Ascari Trading Bot" <no-reply@ascaritradingbot.com>',
       to,
-      subject: 'Subscription Renewal Successful - Remaining Credits',
+      subject: "Subscription Renewal Successful - Remaining Credits",
       html: this.getCreditRemainingTemplate(remainingUsd, remainingAsc),
     };
 
@@ -192,8 +230,11 @@ export class EmailService {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(`Credit remaining email sent successfully to: ${to}`);
     } catch (error) {
-      this.logger.error(`Error sending credit remaining email to ${to}:`, (error as Error).message);
-      throw new Error('Failed to send credit remaining email');
+      this.logger.error(
+        `Error sending credit remaining email to ${to}:`,
+        (error as Error).message,
+      );
+      throw new Error("Failed to send credit remaining email");
     }
   }
 
@@ -220,8 +261,11 @@ export class EmailService {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(`Generic email sent successfully to: ${options.to}`);
     } catch (error) {
-      this.logger.error(`Error sending generic email to ${options.to}:`, (error as Error).message);
-      throw new Error('Failed to send generic email');
+      this.logger.error(
+        `Error sending generic email to ${options.to}:`,
+        (error as Error).message,
+      );
+      throw new Error("Failed to send generic email");
     }
   }
 
@@ -254,7 +298,7 @@ export class EmailService {
   private getPartialPaymentTemplate(
     currentBalanceUsd: number,
     missingAmountUsd: number,
-    missingAsc: number
+    missingAsc: number,
   ): string {
     const missingAscFixed = missingAsc.toFixed(4); // e.g., 4 decimal places
 
@@ -283,7 +327,7 @@ export class EmailService {
     currentCreditUsd: number,
     currentCreditAsc: number,
     requiredUsd: number,
-    requiredAsc: number
+    requiredAsc: number,
   ): string {
     return `
       <div style="font-family: Arial, sans-serif; text-align: center;">
@@ -301,7 +345,7 @@ export class EmailService {
   private getSubscriptionRenewedTemplate(
     newExpiry: string,
     remainingUsd: number,
-    remainingAsc: number
+    remainingAsc: number,
   ): string {
     return `
       <div style="font-family: Arial, sans-serif; text-align: center;">
@@ -316,7 +360,7 @@ export class EmailService {
 
   private getSubscriptionDeactivatedTemplate(
     missingUsd: number,
-    missingAsc: number
+    missingAsc: number,
   ): string {
     return `
       <div style="font-family: Arial, sans-serif; text-align: center;">
@@ -331,7 +375,7 @@ export class EmailService {
 
   private getCreditRemainingTemplate(
     remainingUsd: number,
-    remainingAsc: number
+    remainingAsc: number,
   ): string {
     return `
       <div style="font-family: Arial, sans-serif; text-align: center;">

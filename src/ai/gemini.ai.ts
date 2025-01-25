@@ -1,7 +1,7 @@
-import { Injectable } from '@nestjs/common';
-import { IAiService } from './ai-service.interface';
-import { Prompt } from './prompts';
-import { GenerativeModel, GoogleGenerativeAI } from './google-generative-ai';
+import { Injectable } from "@nestjs/common";
+import { IAiService } from "./ai-service.interface";
+import { Prompt } from "./prompts";
+import { GenerativeModel, GoogleGenerativeAI } from "./google-generative-ai";
 
 @Injectable()
 export class GeminiAIClient implements IAiService {
@@ -9,9 +9,9 @@ export class GeminiAIClient implements IAiService {
   private static _instance: GeminiAIClient | null = null;
 
   public constructor() {
-    const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+    const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
     this.model = genai.getGenerativeModel({
-      model: 'gemini-pro',
+      model: "gemini-pro",
     });
   }
 
@@ -27,7 +27,7 @@ export class GeminiAIClient implements IAiService {
       const response = await this.model.generateContent(prompt.message);
       return response.response.text().trim();
     } catch (error) {
-      console.error('Error in generate method:', error);
+      console.error("Error in generate method:", error);
       throw error;
     }
   }
@@ -38,10 +38,10 @@ export class GeminiAIClient implements IAiService {
     try {
       // Example health check logic (this may vary based on the API)
       const response = await this.model.startChat();
-      return { status: 'healthy' };
+      return { status: "healthy" };
     } catch (error) {
-      console.error('Error in checkAiService:', error);
-      return { status: 'unhealthy' };
+      console.error("Error in checkAiService:", error);
+      return { status: "unhealthy" };
     }
   }
 }

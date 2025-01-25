@@ -1,6 +1,6 @@
-import { Injectable } from '@nestjs/common';
-import axios, { AxiosResponse } from 'axios';
-import Bottleneck from 'bottleneck';
+import { Injectable } from "@nestjs/common";
+import axios, { AxiosResponse } from "axios";
+import Bottleneck from "bottleneck";
 
 @Injectable()
 export class RateLimiterService {
@@ -11,7 +11,9 @@ export class RateLimiterService {
   private cleanUpOldRequests(key: string) {
     const now = Date.now();
     const timestamps = this.requestTimestamps.get(key) || [];
-    const recentRequests = timestamps.filter(timestamp => now - timestamp < this.TIME_FRAME);
+    const recentRequests = timestamps.filter(
+      (timestamp) => now - timestamp < this.TIME_FRAME,
+    );
     this.requestTimestamps.set(key, recentRequests);
   }
 
@@ -30,7 +32,7 @@ export class RateLimiterService {
       // Exceeding rate limit, wait or retry
       const waitTime = this.TIME_FRAME - (Date.now() - Math.min(...timestamps));
       if (waitTime > 0) {
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
       }
     }
     // Perform API request here

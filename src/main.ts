@@ -1,28 +1,33 @@
-import { NestFactory } from '@nestjs/core';
-import cookieParser from 'cookie-parser';
-import { Request, Response, NextFunction } from 'express';
-import { AppModule } from './app.module';
+import { NestFactory } from "@nestjs/core";
+import cookieParser from "cookie-parser";
+import { Request, Response, NextFunction } from "express";
+import { AppModule } from "./app.module";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // Define CORS options for the specific frontend origin
   const corsOptions = {
-    origin: 'https://tradingbot.ascarinet.com', // Allow only this origin
+    origin: "https://tradingbot.ascarinet.com", // Allow only this origin
     credentials: false, // Disable credentials to mimic incognito behavior
-    methods: ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'DELETE'], // Allowed HTTP methods
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'], // Allowed headers
+    methods: ["GET", "HEAD", "OPTIONS", "POST", "PUT", "DELETE"], // Allowed HTTP methods
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+    ], // Allowed headers
   };
 
   // Enable CORS globally with the specified options
   app.enableCors(corsOptions);
-  console.log('CORS Configuration:', corsOptions);
+  console.log("CORS Configuration:", corsOptions);
 
   // Disable caching for all responses
   app.use((req: Request, res: Response, next: NextFunction) => {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     next();
   });
 
@@ -56,10 +61,10 @@ async function bootstrap() {
   await app.listen(3000);
   console.log(
     `Backend server is running on ${
-      process.env.NODE_ENV === 'production'
-        ? 'https://api.ascarinet.com'
-        : 'http://localhost:3000'
-    }`
+      process.env.NODE_ENV === "production"
+        ? "https://api.ascarinet.com"
+        : "http://localhost:3000"
+    }`,
   );
 }
 

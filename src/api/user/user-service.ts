@@ -1,8 +1,8 @@
-import { Inject, Injectable, NotFoundException, Logger } from '@nestjs/common';
-import { UserRepository } from './user-repository';
-import * as bcrypt from 'bcrypt';
-import { EmailService } from '../email/email-service';
-import { User } from './user-entity';
+import { Inject, Injectable, NotFoundException, Logger } from "@nestjs/common";
+import { UserRepository } from "./user-repository";
+import * as bcrypt from "bcrypt";
+import { EmailService } from "../email/email-service";
+import { User } from "./user-entity";
 
 @Injectable()
 export class UserService {
@@ -20,13 +20,17 @@ export class UserService {
   }
 
   // Sign up a new user
-  async signUp(email: string, password: string, wallet_address: string): Promise<User> {
+  async signUp(
+    email: string,
+    password: string,
+    wallet_address: string,
+  ): Promise<User> {
     this.logger.log(`UserService: Signing up user with email: ${email}`);
 
     const existingUser = await this.findByEmail(email);
     if (existingUser) {
-      this.logger.error('UserService: User already exists');
-      throw new Error('User already exists');
+      this.logger.error("UserService: User already exists");
+      throw new Error("User already exists");
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -40,7 +44,9 @@ export class UserService {
 
     // Use UserRepository's `save` method
     const savedUser = await this.userRepository.save(newUser);
-    this.logger.log(`UserService: User signed up successfully: ${JSON.stringify(savedUser)}`);
+    this.logger.log(
+      `UserService: User signed up successfully: ${JSON.stringify(savedUser)}`,
+    );
 
     // Send welcome email
     await this.emailService.sendWelcomeEmail(email);
@@ -53,23 +59,29 @@ export class UserService {
     this.logger.log(`[UserService]: Fetching profile for email: ${email}`);
 
     const user = await this.findByEmail(email);
-    this.logger.log(`[UserService]: Query completed. User found: ${user ? 'Yes' : 'No'}`);
+    this.logger.log(
+      `[UserService]: Query completed. User found: ${user ? "Yes" : "No"}`,
+    );
 
     if (!user) {
       this.logger.error(`[UserService]: User not found for email: ${email}`);
-      throw new NotFoundException('User not found');
+      throw new NotFoundException("User not found");
     }
 
     // Exclude sensitive info like password
     const { password, ...userProfile } = user;
-    this.logger.log(`[UserService]: Returning user profile without password: ${JSON.stringify(userProfile)}`);
+    this.logger.log(
+      `[UserService]: Returning user profile without password: ${JSON.stringify(userProfile)}`,
+    );
 
     return userProfile;
   }
 
   // Delete user profile
   async deleteUserProfile(email: string): Promise<boolean> {
-    this.logger.log(`[UserService]: Attempting to delete user profile for email: ${email}`);
+    this.logger.log(
+      `[UserService]: Attempting to delete user profile for email: ${email}`,
+    );
     const user = await this.findByEmail(email);
     if (!user) {
       this.logger.warn(`[UserService]: User not found for email: ${email}`);
@@ -78,7 +90,9 @@ export class UserService {
 
     // Use UserRepository's `delete` method
     const result = await this.userRepository.delete(user.id);
-    this.logger.log(`[UserService]: Deletion result for user ID ${user.id}: ${result.affected ?? 0} row(s) affected`);
+    this.logger.log(
+      `[UserService]: Deletion result for user ID ${user.id}: ${result.affected ?? 0} row(s) affected`,
+    );
 
     return (result.affected ?? 0) > 0;
   }
@@ -89,7 +103,7 @@ export class UserService {
     const user = await this.userRepository.findById(id);
     if (!user) {
       this.logger.warn(`User with ID ${id} not found.`);
-      throw new NotFoundException('User not found');
+      throw new NotFoundException("User not found");
     }
     this.logger.log(`User found: ${JSON.stringify(user)}`);
     return user;
@@ -99,18 +113,20 @@ export class UserService {
     const user = await this.findByEmail(email);
     if (!user) {
       this.logger.error(`UserService: User not found for email: ${email}`);
-      throw new NotFoundException('User not found');
+      throw new NotFoundException("User not found");
     }
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
     const updatedUser = await this.userRepository.save(user);
-    this.logger.log(`UserService: Password reset successfully for user: ${JSON.stringify(updatedUser)}`);
+    this.logger.log(
+      `UserService: Password reset successfully for user: ${JSON.stringify(updatedUser)}`,
+    );
     // Optionally, send a confirmation email:
     await this.emailService.sendEmail({
       to: email,
-      subject: 'Your Password Has Been Reset',
-      text: 'Your password has been reset successfully. If you did not perform this action, please contact support immediately.',
+      subject: "Your Password Has Been Reset",
+      text: "Your password has been reset successfully. If you did not perform this action, please contact support immediately.",
     });
     return true;
   }
-}  
+}
