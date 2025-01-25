@@ -442,21 +442,28 @@ export class TradingController {
     }
   }
   @UseGuards(AuthGuard)
-  @Get("accumulated-profit")
-  async getAccumulatedProfit(): Promise<any> {
-    console.log("Received request to retrieve accumulated profit");
-    try {
-      const accumulatedProfit = this.tradingService.getAccumulatedProfit();
-      console.log("Accumulated Profit:", accumulatedProfit);
-      return { accumulatedProfit };
-    } catch (error) {
-      console.error("Error retrieving accumulated profit:", error);
-      throw new HttpException(
-        "Failed to retrieve accumulated profit",
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
+@Get("accumulated-profit")
+async getAccumulatedProfit(@Req() req: any): Promise<any> {
+  console.log("Received request to retrieve accumulated profit");
+  try {
+    // Extract userId from the request
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error("User ID is missing from the request context");
     }
+
+    const accumulatedProfit = this.tradingService.getAccumulatedProfit(userId);
+    console.log(`Accumulated Profit for user ${userId}:`, accumulatedProfit);
+    return { accumulatedProfit };
+  } catch (error) {
+    console.error("Error retrieving accumulated profit:", error);
+    throw new HttpException(
+      "Failed to retrieve accumulated profit",
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
   }
+}
+
   @UseGuards(AuthGuard)
   @Get("profit-target")
   async getProfitTarget(@Req() req: RequestWithUser): Promise<any> {

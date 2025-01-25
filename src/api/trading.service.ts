@@ -230,36 +230,46 @@ export class TradingService {
     expectedSoldQuantity: number,
   ): Promise<void> {
     const logger = getUserLogger(userId);
+    const state = this.getUserTradeState(userId);
     let retries = 0;
     const maxRetries = 3;
     const valueThreshold = 1.0; // The threshold value in USD
-
-    // Wait a few seconds before checking after the sell order.
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-
+  
     while (retries < maxRetries) {
       try {
+        // Wait a few seconds before checking after the sell order.
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+  
         // Check the available quantity of the asset for the given symbol.
-        const remainingQuantity = await this.getAvailableQuantity(
-          userId,
-          symbol,
-        );
-        // Get the current market price for the symbol
+        const remainingQuantity = await this.getAvailableQuantity(userId, symbol);
         const currentPrice = await this.fetchTicker(symbol);
-        // Calculate the dollar value of the remaining asset
         const remainingValue = remainingQuantity * currentPrice;
-
-        // If the remaining dollar value is less than $1.00, consider the sell complete.
+  
         if (remainingValue < valueThreshold) {
           logger.info(
-            `Sell confirmed for ${symbol}. Remaining value ($${remainingValue.toFixed(2)}) is below $${valueThreshold}.`,
+            `Sell confirmed for ${symbol}. Remaining value ($${remainingValue.toFixed(
+              2,
+            )}) is below $${valueThreshold}.`,
           );
-          return;
+  
+          // Transition to monitoring after sale
+          logger.info(`Transitioning to monitoring after sale for ${symbol}.`);
+          console.log(`[ensureSellCompleted] Transitioning to monitoring after sale for ${symbol}`);
+  
+          // Update the state and clear the sell retry loop
+          state.purchasePrices[symbol] = {
+            ...state.purchasePrices[symbol],
+            quantity: 0,
+            sold: true, // Mark as sold
+          };
+          this.monitorAfterSale(userId, symbol, expectedSoldQuantity, currentPrice, state.profitTarget);
+          return; // Exit the retry loop
         } else {
           logger.warn(
-            `Sell order for ${symbol} not fully executed. Remaining value: $${remainingValue.toFixed(2)}. Reattempting sell...`,
+            `Sell order for ${symbol} not fully executed. Remaining value: $${remainingValue.toFixed(
+              2,
+            )}. Reattempting sell...`,
           );
-          // Attempt to sell the remaining quantity
           await this.placeOrder(userId, symbol, "sell", remainingQuantity);
         }
       } catch (error) {
@@ -267,18 +277,27 @@ export class TradingService {
           `Error during sell confirmation for ${symbol}: ${(error as Error).message}`,
         );
       }
+  
       retries++;
-      // Wait before the next retry
-      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
+  
     logger.error(
       `Failed to fully execute sell order for ${symbol} after ${maxRetries} attempts.`,
     );
   }
-
-  public getAccumulatedProfit(): number {
-    return this.accumulatedProfit;
+  
+  public getAccumulatedProfit(userId: number): number {
+    const state = this.getUserTradeState(userId);
+  
+    if (!state) {
+      console.warn(`No trade state found for user ${userId}. Returning 0.`);
+      return 0;
+    }
+  
+    console.log(`[getAccumulatedProfit] Accumulated profit for user ${userId}: ${state.accumulatedProfit}`);
+    return state.accumulatedProfit;
   }
+  
 
   /**
    * Retrieves the user's balance for a specific currency.
@@ -763,71 +782,57 @@ export class TradingService {
  * @param quantity - The quantity bought.
  * @param sellPrice - The current sell price.
  */
-private async checkAndHandleProfit(
-  userId: number,
-  symbol: string,
-  quantity: number,
-  sellPrice: number,
-): Promise<void> {
-  const logger = getUserLogger(userId);
-  const state = this.getUserTradeState(userId);
-
-  try {
-    console.log(`[checkAndHandleProfit] Starting profit check for user: ${userId}, symbol: ${symbol}`);
-    console.log(`[checkAndHandleProfit] State before update:`, JSON.stringify(state, null, 2));
-    
-    const purchase = state.purchasePrices[symbol];
+  private async checkAndHandleProfit(
+    userId: number,
+    symbol: string,
+    quantity: number,
+    sellPrice: number,
+  ): Promise<void> {
+    const logger = getUserLogger(userId);
+    const state = this.getUserTradeState(userId);
   
-    if (!purchase) {
-      logger.error(`No purchase data found for ${symbol}`);
-      console.error(`[checkAndHandleProfit] No purchase data found for symbol: ${symbol}`);
-      throw new Error(`Purchase data missing for symbol: ${symbol}`);
-    }
-
-    const purchasePrice = purchase.price;
-    console.log(`[checkAndHandleProfit] Purchase price for ${symbol}: ${purchasePrice}`);
-    console.log(`[checkAndHandleProfit] Sell price for ${symbol}: ${sellPrice}`);
-    console.log(`[checkAndHandleProfit] Quantity: ${quantity}`);
-
-    const realizedProfit = (sellPrice - purchasePrice) * quantity;
-    console.log(`[checkAndHandleProfit] Realized profit for ${symbol}: ${realizedProfit}`);
-
-    // Update the accumulated profit
-    state.accumulatedProfit += realizedProfit;
-    console.log(`[checkAndHandleProfit] Updated accumulated profit: ${state.accumulatedProfit}`);
-
-    // Persist the updated state
-    this.userTrades.set(userId, state);
-    console.log(`[checkAndHandleProfit] Updated state persisted for user: ${userId}`);
-
-    logger.info(
-      `Accumulated profit updated for user ${userId}: ${state.accumulatedProfit.toFixed(2)} USDT`,
-    );
-
-    // Check if profit target is reached
-    if (state.accumulatedProfit >= state.profitTarget) {
-      logger.info(
-        `Profit target of ${state.profitTarget} reached for ${symbol}. Stopping trades.`,
+    try {
+      logger.info(`[checkAndHandleProfit] Starting profit check for user: ${userId}, symbol: ${symbol}`);
+      
+      const purchase = state.purchasePrices[symbol];
+      if (!purchase) {
+        logger.error(`No purchase data found for ${symbol}`);
+        throw new Error(`Purchase data missing for symbol: ${symbol}`);
+      }
+  
+      const purchasePrice = purchase.price;
+      const realizedProfit = (sellPrice - purchasePrice) * quantity;
+  
+      // Ensure profit values are calculated correctly
+      const roundedProfit = parseFloat(realizedProfit.toFixed(2));
+      if (isNaN(roundedProfit)) {
+        logger.error(`[checkAndHandleProfit] Invalid profit calculated: ${realizedProfit}`);
+        throw new Error("Invalid profit value calculated");
+      }
+  
+      // Update accumulated profit
+      state.accumulatedProfit += roundedProfit;
+      state.accumulatedProfit = parseFloat(state.accumulatedProfit.toFixed(2)); // Normalize to two decimals
+  
+      // Log updated profit
+      logger.info(`Accumulated profit updated for user ${userId}: ${state.accumulatedProfit.toFixed(2)} USDT`);
+  
+      // Persist the updated state
+      this.userTrades.set(userId, state);
+  
+      // Check if profit target is reached
+      if (state.accumulatedProfit >= state.profitTarget) {
+        logger.info(`Profit target of ${state.profitTarget} reached. Stopping trades.`);
+        this.stopTrade(userId);
+        return;
+      }
+    } catch (error) {
+      logger.error(
+        `Error in checkAndHandleProfit for user ${userId}, symbol ${symbol}: ${(error as Error).message}`
       );
-      console.log(
-        `[checkAndHandleProfit] Profit target of ${state.profitTarget} reached for ${symbol}. Stopping trades.`,
-      );
-
-      // Stop trading activities for the user
-      this.stopTrade(userId);
-      console.log(`[checkAndHandleProfit] Trading stopped for user: ${userId}`);
-      return;
+      throw error;
     }
-  } catch (error) {
-    logger.error(
-      `Error in checkAndHandleProfit for user ${userId}, symbol ${symbol}: ${(error as Error).message}`,
-    );
-    console.error(
-      `[checkAndHandleProfit] Error for user ${userId}, symbol ${symbol}: ${(error as Error).message}`,
-    );
-    throw error;
-  }
-}
+  }  
 
 
   private isNewDay(state: UserTradeState): boolean {

@@ -73,32 +73,47 @@ export class LogService {
     }
   }
 
-  /**
-   * Retrieves logs for a specific user.
-   * @param userId - The ID of the user whose logs are to be fetched.
-   * @returns The log contents as a string or a message if no logs are available.
-   */
-  async getLogs(userId: number): Promise<string> {
-    try {
-      const logFilePath = path.join(this.logsDirectory, `user-${userId}.log`);
-      console.log(`[getLogs] Log file path for user ${userId}: ${logFilePath}`);
+ /**
+ * Retrieves logs for a specific user.
+ * @param userId - The ID of the user whose logs are to be fetched.
+ * @returns The log contents as a string or a message if no logs are available.
+ */
+async getLogs(userId: number): Promise<string> {
+  try {
+    const userLogsPattern = path.join(this.logsDirectory, `user-${userId}*.log*`);
 
-      if (!fs.existsSync(logFilePath)) {
-        console.log(`[getLogs] No log file found for user ${userId}`);
-        return "No records available";
-      }
+    // Get all matching log files for the user
+    const matchingFiles = fs.readdirSync(this.logsDirectory).filter((file) =>
+      file.startsWith(`user-${userId}`)
+    );
 
-      const logs = fs.readFileSync(logFilePath, "utf8").trim();
-      console.log(`[getLogs] Retrieved logs for user ${userId}:`, logs);
-      return logs || "No records available";
-    } catch (error) {
-      console.error(
-        "[getLogs] Failed to read log files:",
-        error instanceof Error ? error.message : String(error),
-      );
-      throw new InternalServerErrorException("Failed to read log files");
+    if (matchingFiles.length === 0) {
+      console.log(`[getLogs] No matching log files found for user ${userId}`);
+      return "No records available";
     }
+
+    // Sort files by modification date to get the latest
+    const latestLogFile = matchingFiles
+      .map((file) => ({
+        file,
+        time: fs.statSync(path.join(this.logsDirectory, file)).mtime.getTime(),
+      }))
+      .sort((a, b) => b.time - a.time)[0].file;
+
+
+    const logFilePath = path.join(this.logsDirectory, latestLogFile);
+    const logs = fs.readFileSync(logFilePath, "utf8").trim();
+
+    return logs || "No records available";
+  } catch (error) {
+    console.error(
+      "[getLogs] Failed to read log files:",
+      error instanceof Error ? error.message : String(error),
+    );
+    throw new InternalServerErrorException("Failed to read log files");
   }
+}
+
 
   /**
    * Truncates logs to the last `maxLogs` entries for a specific user.
