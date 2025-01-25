@@ -1299,4 +1299,65 @@ export class TradingService {
       payloadLogs: state.payloadLogs,
     };
   }
+/**
+ * Sells the specified coin immediately and transitions to monitoring after sale.
+ * Stops continuous monitoring for the instance upon sell.
+ * @param userId - The ID of the user.
+ * @param symbol - The trading symbol in "BASE_QUOTE" format (e.g., "PWC_USDT").
+ */
+public async sellNow(userId: number, symbol: string): Promise<void> {
+  const logger = getUserLogger(userId);
+  const state = this.getUserTradeState(userId);
+
+  try {
+    logger.info(`[sellNow] User ${userId} requested to sell ${symbol} immediately.`);
+
+    const purchase = state.purchasePrices[symbol];
+    if (!purchase || purchase.quantity <= 0) {
+      throw new Error(`No active trade found for symbol: ${symbol}`);
+    }
+
+    const quantityToSell = purchase.quantity;
+    const currentPrice = await this.fetchTicker(symbol);
+
+    if (currentPrice === undefined || isNaN(currentPrice)) {
+      throw new Error(`Failed to fetch current price for ${symbol}`);
+    }
+
+    logger.info(`[sellNow] Current price for ${symbol}: ${currentPrice}. Proceeding with sell.`);
+
+    // Stop continuous monitoring for this symbol
+    if (state.monitorIntervals[symbol]) {
+      clearInterval(state.monitorIntervals[symbol]);
+      delete state.monitorIntervals[symbol];
+      logger.info(`[sellNow] Continuous monitoring stopped for ${symbol}.`);
+    }
+
+    // Place the sell order
+    await this.placeOrder(userId, symbol, "sell", quantityToSell);
+    await this.ensureSellCompleted(userId, symbol, quantityToSell);
+
+    // --------------------------------------------
+    //   IMPORTANT: Update accumulated profit here
+    // --------------------------------------------
+    await this.checkAndHandleProfit(userId, symbol, quantityToSell, currentPrice);
+
+    logger.info(`[sellNow] Sell order completed for ${symbol}. Transitioning to monitoring after sale.`);
+
+    // Mark the trade as sold in the user state
+    state.purchasePrices[symbol] = {
+      ...state.purchasePrices[symbol],
+      quantity: 0,
+      sold: true,
+    };
+
+    // Transition to after-sale monitoring logic
+    this.monitorAfterSale(userId, symbol, quantityToSell, currentPrice, state.profitTarget);
+
+    logger.info(`[sellNow] Monitoring after sale started for ${symbol}.`);
+  } catch (error) {
+    logger.error(`[sellNow] Error processing immediate sell for ${symbol}: ${(error as Error).message}`);
+    throw error;
+  }
+}
 }

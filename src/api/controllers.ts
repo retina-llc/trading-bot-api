@@ -255,6 +255,7 @@ export class TradingController {
       throw error;
     }
   }
+  
   /**
    * Endpoint to start a trade.
    *
@@ -731,6 +732,44 @@ async getAccumulatedProfit(@Req() req: any): Promise<any> {
       );
     }
   }
+  /**
+ * Endpoint to trigger an immediate sell and stop continuous monitoring.
+ *
+ * @param req - The request object containing user information.
+ * @param body.symbol - The trading pair symbol in "BASE_QUOTE" format (e.g., "BTC_USDT").
+ * @returns A success message or throws an error.
+ */
+@UseGuards(AuthGuard) // Protect the endpoint
+@Post("sell-now")
+async sellNow(
+  @Req() req: RequestWithUser,
+  @Body() body: { symbol: string },
+): Promise<any> {
+  const userId = req.user?.id; // Extract userId
+  if (!userId) {
+    throw new HttpException("Unauthorized", HttpStatus.UNAUTHORIZED);
+  }
+
+  const { symbol } = body;
+
+  if (!symbol) {
+    throw new BadRequestException("Symbol is required.");
+  }
+
+  console.log(`Received request to sell now for userId: ${userId}, symbol: ${symbol}`);
+
+  try {
+    await this.tradingService.sellNow(userId, symbol);
+    return { message: `Sell order placed for ${symbol}, monitoring stopped.` };
+  } catch (error) {
+    console.error(`[sellNow] Error processing sell-now request for ${symbol}:`, error);
+    throw new HttpException(
+      `Failed to process sell-now request: ${(error as Error).message}`,
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
+  }
+}
+
   @UseGuards(AuthGuard)
   @Get("status")
   getStatus(@Req() req: RequestWithUser): any {
@@ -740,6 +779,7 @@ async getAccumulatedProfit(@Req() req: any): Promise<any> {
     }
     return this.tradingService.getStatus(userId);
   }
+  
   @Post("delete-api-keys")
   async deleteApiKeys(@Req() req: Request): Promise<{ message: string }> {
     const authHeader = req.headers.authorization;
