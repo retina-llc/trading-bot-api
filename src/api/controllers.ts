@@ -257,39 +257,65 @@ export class TradingController {
   }
   
   /**
-   * Endpoint to start a trade.
-   *
+   * Sets the user's default profit thresholds for trading.
    * @param req - The request object containing user information.
-   * @param body.symbol - The trading pair symbol in "BASE_QUOTE" format (e.g., "PWC_USDT").
-   * @param body.amount - The amount to invest.
-   * @param body.rebuyPercentage - The percentage to rebuy.
-   * @param body.profitTarget - The profit target.
-   * @returns A success message or throws an error.
+   * @param body.thresholds - Array of profit percentages at which to sell.
    */
-  @UseGuards(AuthGuard) // Protect the endpoint
-  @Post("start-trade")
-  async startTrade(
+  @UseGuards(AuthGuard)
+  @Post("set-thresholds")
+  async setTradeThresholds(
     @Req() req: RequestWithUser,
-    @Body()
-    body: {
-      symbol: string;
-      amount: number;
-      rebuyPercentage: number;
-      profitTarget: number;
-    },
-  ): Promise<any> {
-    const userId = req.user?.id; // Extract userId
+    @Body() body: {
+      profitThreshold: number;  // Percentage as decimal
+      lossThreshold: number;    // Percentage as decimal
+    }
+  ) {
+    const userId = req.user?.id;
     if (!userId) {
       throw new HttpException("Unauthorized", HttpStatus.UNAUTHORIZED);
     }
 
-    const { symbol, amount, rebuyPercentage, profitTarget } = body;
-
-    if (!symbol || !amount || !rebuyPercentage || !profitTarget) {
-      throw new BadRequestException(
-        "Symbol, amount, rebuyPercentage, and profitTarget are required.",
+    try {
+      this.tradingService.setUserThresholds(
+        userId,
+        body.profitThreshold,
+        body.lossThreshold
+      );
+      return {
+        message: 'Trading thresholds updated successfully',
+        profitThreshold: `${(body.profitThreshold * 100).toFixed(2)}%`,
+        lossThreshold: `${(body.lossThreshold * 100).toFixed(2)}%`
+      };
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new HttpException(
+        `Failed to set thresholds: ${errorMessage}`,
+        HttpStatus.BAD_REQUEST
       );
     }
+  }
+
+  /**
+   * Starts a trade with optional custom profit thresholds.
+   */
+  @UseGuards(AuthGuard)
+  @Post("start-trade")
+  async startTrade(
+    @Req() req: RequestWithUser,
+    @Body() body: {
+      symbol: string;
+      amount: number;
+      rebuyPercentage: number;
+      profitTarget: number;
+      profitThresholds?: number[];
+    }
+  ): Promise<any> {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new HttpException("Unauthorized", HttpStatus.UNAUTHORIZED);
+    }
+
+    const { symbol, amount, rebuyPercentage, profitTarget, profitThresholds } = body;
 
     try {
       const result = await this.tradingService.startTrade(
@@ -298,14 +324,20 @@ export class TradingController {
         amount,
         rebuyPercentage,
         profitTarget,
+        undefined, // default profit check threshold
+        undefined, // default loss check threshold
+        profitThresholds // optional custom thresholds
       );
-      return { message: `Trade started for ${symbol}.`, ...result };
+      return { 
+        message: `Trade started for ${symbol}`,
+        ...result,
+        profitThresholds: profitThresholds || 'using default thresholds'
+      };
     } catch (error: unknown) {
-      const err = error as Error;
-      console.error(`[startTrade] Error: ${err.message}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       throw new HttpException(
-        `Failed to start trade: ${err.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR,
+        `Failed to start trade: ${errorMessage}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
       );
     }
   }
@@ -829,6 +861,103 @@ async sellNow(
       throw new HttpException(
         "Failed to delete API keys",
         HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+  @UseGuards(AuthGuard) // Guard to ensure user is authenticated
+@Post("buy-now")
+async buyNow(
+  @Req() req: RequestWithUser,
+  @Body() body: { symbol: string; usdtAmount?: number }, // Make usdtAmount optional
+): Promise<any> {
+  const userId = req.user?.id;
+  if (!userId) {
+    throw new HttpException("Unauthorized", HttpStatus.UNAUTHORIZED);
+  }
+
+  // Destructure the values
+  const { symbol, usdtAmount } = body;
+
+  // Still require the symbol
+  if (!symbol) {
+    throw new BadRequestException("Symbol is required.");
+  }
+
+  // (No more 'usdtAmount must be positive' check.)
+  console.log(
+    `Received request to buy now for userId: ${userId}, ` +
+    `symbol: ${symbol}, amount: ${usdtAmount} USDT (ignored if 0)`,
+  );
+
+  try {
+    // Pass 0 or the raw value. The service logic will do (balance * rebuyPercentage / 100).
+    await this.tradingService.buyNow(userId, symbol, usdtAmount || 0);
+
+    return { message: `Buy order placed for ${symbol}, monitoring started.` };
+  } catch (error) {
+    console.error(`[buyNow] Error processing buy-now request for ${symbol}:`, error);
+    throw new HttpException(
+      `Failed to process buy-now request: ${(error as Error).message}`,
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
+  }
+}
+
+  @UseGuards(AuthGuard)
+  @Post("set-after-sale-thresholds")
+  async setAfterSaleThresholds(
+    @Req() req: RequestWithUser,
+    @Body() body: {
+      profitThreshold: number;
+      lossThreshold: number;
+    }
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new HttpException("Unauthorized", HttpStatus.UNAUTHORIZED);
+    }
+
+    try {
+      this.tradingService.setAfterSaleThresholds(
+        userId,
+        body.profitThreshold,
+        body.lossThreshold
+      );
+      return {
+        message: 'After-sale thresholds updated successfully',
+        profitThreshold: `${(body.profitThreshold * 100).toFixed(2)}%`,
+        lossThreshold: `${(body.lossThreshold * 100).toFixed(2)}%`
+      };
+    } catch (error: unknown) {
+      throw new HttpException(
+        `Failed to set after-sale thresholds: ${(error as Error).message}`,
+        HttpStatus.BAD_REQUEST
+      );
+    }
+  }
+
+  @UseGuards(AuthGuard)
+  @Get("get-thresholds")
+  async getTradeThresholds(@Req() req: RequestWithUser) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new HttpException("Unauthorized", HttpStatus.UNAUTHORIZED);
+    }
+
+    try {
+      const thresholds = await this.tradingService.getUserThresholds(userId);
+      return {
+        message: 'Trading thresholds retrieved successfully',
+        profitThreshold: `${(thresholds.profitThreshold * 100).toFixed(2)}%`,
+        lossThreshold: `${(thresholds.lossThreshold * 100).toFixed(2)}%`,
+        afterSaleProfitThreshold: `${(thresholds.afterSaleProfitThreshold * 100).toFixed(2)}%`,
+        afterSaleLossThreshold: `${(thresholds.afterSaleLossThreshold * 100).toFixed(2)}%`
+      };
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new HttpException(
+        `Failed to get thresholds: ${errorMessage}`,
+        HttpStatus.BAD_REQUEST
       );
     }
   }

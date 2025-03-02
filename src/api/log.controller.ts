@@ -44,16 +44,24 @@ export class LogController {
    * Deletes logs for the authenticated user.
    */
   @UseGuards(JwtAuthGuard) // Use JwtAuthGuard
-  @Delete()
-  async deleteLogs(@Req() req: Request): Promise<string> {
-    console.log("Received request to delete logs");
-    const user = req.user as any; // Adjust based on your authentication setup
+  @Delete("delete")  // Add explicit path
+  async deleteLogs(@Req() req: Request): Promise<{ message: string }> {
+    const user = req.user as any;
     if (!user || !user.id) {
       throw new UnauthorizedException("User not found");
     }
+
     try {
+      // Wait for deletion to complete
       await this.logService.deleteUserLogs(user.id);
-      return "Logs deleted successfully";
+      
+      // Verify logs are deleted
+      const logs = await this.logService.getLogs(user.id);
+      if (logs && logs !== "No records available") {
+        throw new Error("Logs were not properly deleted");
+      }
+
+      return { message: "Logs deleted successfully" };
     } catch (error) {
       console.error("Error deleting logs:", error);
       throw new HttpException(

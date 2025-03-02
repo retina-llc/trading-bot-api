@@ -4,6 +4,7 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  Logger,
 } from "@nestjs/common";
 import axios from "axios";
 import * as crypto from "crypto";
@@ -14,11 +15,19 @@ import { UserRepository } from "./user/user-repository";
 import { SymbolHelper } from "./utils/symbol.helper"; // Ensure correct path
 
 const BITMART_API_URL = "https://api-cloud.bitmart.com";
+interface PurchaseInfo {
+  price: number;
+  timestamp: number;
+  quantity: number;
+  sold?: boolean;
+  rebuyPercentage?: number; // <-- declare here
+  profitThresholds: number[]; // Array of profit percentages to sell at
+}
 
 interface UserTradeState {
   purchasePrices: Record<
     string,
-    { price: number; timestamp: number; quantity: number; sold?: boolean }
+    { price: number; timestamp: number; quantity: number; sold?: boolean; rebuyPercentage?: number; profitThresholds: number[]; }
   >;
   lastRecordedPrices: Record<string, number>; // New field to store last recorded current price
   profitTarget: number;
@@ -27,9 +36,17 @@ interface UserTradeState {
   payloadLogs: Record<string, any[]>;
   monitorIntervals: Record<string, NodeJS.Timeout>;
   activeMonitoringIntervals: Record<string, NodeJS.Timeout>;
+  profitCheckThreshold: number;     // For normal trading
+  lossCheckThreshold: number;       // For normal trading
+  afterSaleProfitThreshold: number; // For after-sale monitoring
+  afterSaleLossThreshold: number;   // For after-sale monitoring
+  profitThresholds: number[]; // Default thresholds for new trades
+  activeTrades: string[];
+  afterSaleMonitorIntervals: { [key: string]: NodeJS.Timeout };
 }
 @Injectable()
 export class TradingService {
+  private readonly logger = new Logger(TradingService.name);
   private payloadLogs: Record<string, any[]> = {};
   private purchasePrices: Record<
     string,
@@ -43,6 +60,8 @@ export class TradingService {
   private skyrocketProfitTarget: number = 0;
   private activeMonitoringIntervals: Record<string, NodeJS.Timeout> = {};
   private userTrades = new Map<number, UserTradeState>();
+  private userTradeStates: Map<number, UserTradeState> = new Map();
+  private DEFAULT_PROFIT_THRESHOLDS = [1, 3]; // Default profit percentages
 
   constructor(private readonly userRepository: UserRepository) {}
 
@@ -179,19 +198,9 @@ export class TradingService {
   private getUserTradeState(userId: number): UserTradeState {
     let state = this.userTrades.get(userId);
     if (!state) {
-      state = {
-        lastRecordedPrices: {}, // Initialize this field
-        purchasePrices: {},
-        profitTarget: 0,
-        accumulatedProfit: 0,
-        startDayTimestamp: Date.now(),
-        payloadLogs: {},
-        monitorIntervals: {},
-        activeMonitoringIntervals: {},
-      };
-      this.userTrades.set(userId, state);
+      state = this.initializeTradeState(userId);
     }
-    return state;
+    return state; // Now state is guaranteed to be UserTradeState
   }
   private async getMonitoringAuthHeaders(
     userId: number,
@@ -231,70 +240,54 @@ export class TradingService {
   ): Promise<void> {
     const logger = getUserLogger(userId);
     const state = this.getUserTradeState(userId);
-    let retries = 0;
-    const maxRetries = 3;
-    const valueThreshold = 1.0; // The threshold value in USD
-  
-    while (retries < maxRetries) {
-      try {
-        // Wait a few seconds before checking after the sell order.
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-  
-        // Check the available quantity of the asset for the given symbol.
-        const remainingQuantity = await this.getAvailableQuantity(userId, symbol);
-        const currentPrice = await this.fetchTicker(symbol);
-        const remainingValue = remainingQuantity * currentPrice;
-  
-        if (remainingValue < valueThreshold) {
-          logger.info(
-            `Sell confirmed for ${symbol}. Remaining value ($${remainingValue.toFixed(
-              2,
-            )}) is below $${valueThreshold}.`,
-          );
-  
-          // Transition to monitoring after sale
-          logger.info(`Transitioning to monitoring after sale for ${symbol}.`);
-          console.log(`[ensureSellCompleted] Transitioning to monitoring after sale for ${symbol}`);
-  
-          // Update the state and clear the sell retry loop
-          state.purchasePrices[symbol] = {
-            ...state.purchasePrices[symbol],
-            quantity: 0,
-            sold: true, // Mark as sold
-          };
-          this.monitorAfterSale(userId, symbol, expectedSoldQuantity, currentPrice, state.profitTarget);
-          return; // Exit the retry loop
-        } else {
-          logger.warn(
-            `Sell order for ${symbol} not fully executed. Remaining value: $${remainingValue.toFixed(
-              2,
-            )}. Reattempting sell...`,
-          );
-          await this.placeOrder(userId, symbol, "sell", remainingQuantity);
-        }
-      } catch (error) {
-        logger.error(
-          `Error during sell confirmation for ${symbol}: ${(error as Error).message}`,
-        );
+
+    try {
+      // Check if already sold
+      if (state.purchasePrices[symbol]?.sold) {
+        logger.info(`${symbol} already marked as sold, proceeding to after-sale monitoring`);
+        const rebuyPercentage = state.purchasePrices[symbol]?.rebuyPercentage || 10;
+        await this.startMonitoringAfterSale(userId, symbol, rebuyPercentage);
+        return;
       }
-  
-      retries++;
+
+      // Get remaining balance with retry
+      const remainingQuantity = await this.getSymbolBalance(userId, symbol);
+      const currentPrice = await this.fetchTickerWithRetry(symbol);
+      const remainingValue = remainingQuantity * currentPrice;
+
+      if (remainingValue < 1) {
+        logger.info(`Sell confirmed for ${symbol}. Remaining value ($${remainingValue.toFixed(2)}) is below $1.`);
+        
+        // Update state ONCE
+        if (state.purchasePrices[symbol]) {
+          state.purchasePrices[symbol].sold = true;
+          state.purchasePrices[symbol].quantity = 0;
+        }
+
+        // Handle profit calculation
+        await this.checkAndHandleProfit(userId, symbol, expectedSoldQuantity, currentPrice);
+
+        // Start after-sale monitoring ONCE
+        const rebuyPercentage = state.purchasePrices[symbol]?.rebuyPercentage || 10;
+        logger.info(`Transitioning to after-sale monitoring for ${symbol}`);
+        await this.startMonitoringAfterSale(userId, symbol, rebuyPercentage);
+        return;
+      }
+
+      throw new Error(`Sell not fully confirmed for ${symbol}. Remaining value: $${remainingValue.toFixed(2)}`);
+    } catch (error) {
+      logger.error(`Error during sell confirmation for ${symbol}: ${(error as Error).message}`);
+      throw error;
     }
-  
-    logger.error(
-      `Failed to fully execute sell order for ${symbol} after ${maxRetries} attempts.`,
-    );
   }
   
   public getAccumulatedProfit(userId: number): number {
     const state = this.getUserTradeState(userId);
   
     if (!state) {
-      console.warn(`No trade state found for user ${userId}. Returning 0.`);
       return 0;
     }
   
-    console.log(`[getAccumulatedProfit] Accumulated profit for user ${userId}: ${state.accumulatedProfit}`);
     return state.accumulatedProfit;
   }
   
@@ -309,16 +302,12 @@ export class TradingService {
     userId: number,
     currency: string = "USDT",
   ): Promise<number> {
-    const logger = getUserLogger(userId); // Retrieve user-specific logger
+    const logger = getUserLogger(userId);
     const url = `${BITMART_API_URL}/account/v1/wallet`;
 
     try {
       logger.info("Starting balance fetch process.");
 
-      // Log the URL being accessed
-      console.log(`[getUserBalance] URL: ${url}`);
-
-      // Retrieve authentication headers
       const headers = await this.getAuthHeaders(
         userId,
         "/account/v1/wallet",
@@ -327,61 +316,26 @@ export class TradingService {
         {},
       );
 
-      // Log the headers being used (excluding sensitive information)
-      console.log(`[getUserBalance] Headers:`, {
-        "X-BM-KEY": headers["X-BM-KEY"] ? "****" : null,
-        "X-BM-TIMESTAMP": headers["X-BM-TIMESTAMP"],
-        "X-BM-MEMO": headers["X-BM-MEMO"] ? "****" : null,
-        "Content-Type": headers["Content-Type"],
-      });
-
       logger.info("Fetching user balance from BitMart API.");
 
-      // Make the API request to fetch the wallet information
       const response = await axios.get(url, { headers });
 
-      // Log the full API response for debugging purposes
-      console.log(
-        `[getUserBalance] API Response:`,
-        JSON.stringify(response.data, null, 2),
-      );
-
-      // Ensure that the response structure is as expected
       if (
         !response.data ||
         !response.data.data ||
         !Array.isArray(response.data.data.wallet)
       ) {
-        logger.error("Unexpected API response structure:", response.data);
+        logger.error("Unexpected API response structure");
         throw new Error("Unexpected API response structure");
       }
 
-      // Find the balance entry for the specified currency
       const balanceEntry = response.data.data.wallet.find(
         (b: any) => b.currency.toUpperCase() === currency.toUpperCase(),
       );
 
-      // Log the found balance entry
-      if (balanceEntry) {
-        console.log(
-          `[getUserBalance] Found ${currency} Balance:`,
-          balanceEntry,
-        );
-      } else {
-        console.warn(
-          `[getUserBalance] ${currency} balance not found in wallet data.`,
-        );
-      }
-
-      // Parse the available balance
       const availableBalance = balanceEntry
         ? parseFloat(balanceEntry.available)
         : 0;
-
-      // Log the parsed available balance
-      console.log(
-        `[getUserBalance] Available ${currency} Balance: ${availableBalance}`,
-      );
 
       logger.info(
         `User balance retrieved successfully: ${availableBalance} ${currency}`,
@@ -389,17 +343,7 @@ export class TradingService {
 
       return availableBalance;
     } catch (error: unknown) {
-      const err = error as any; // Type assertion
-
-      // Log the error details
-      console.error("[getUserBalance] Error fetching user balance:", {
-        message: err.message || "Unknown error",
-        stack: err.stack || "No stack trace available",
-        response: err.response
-          ? JSON.stringify(err.response.data, null, 2)
-          : "No response data",
-      });
-
+      const err = error as any;
       logger.error(
         "Error fetching user balance:",
         err.message || "Unknown error",
@@ -414,41 +358,25 @@ export class TradingService {
    * @returns The last traded price.
    */
   private async fetchTicker(symbol: string): Promise<number> {
-    const formattedSymbol = SymbolHelper.toCCXTSymbol(symbol); // Convert to "PWC/USDT"
-    const apiSymbol = symbol; // Use original symbol for API URL
-
+    const formattedSymbol = SymbolHelper.toCCXTSymbol(symbol);
+    const apiSymbol = symbol;
     const url = `${BITMART_API_URL}/spot/v1/ticker?symbol=${apiSymbol}`;
-    console.log(`Fetching ticker data for symbol: ${symbol} from URL: ${url}`);
+
     try {
       const response = await axios.get(url);
-      console.log(
-        `Response data for symbol ${symbol}:`,
-        JSON.stringify(response.data, null, 2),
-      );
-
       const tickers = response.data.data.tickers;
+      
       if (!tickers || tickers.length === 0) {
-        console.error(`No ticker data available for symbol: ${symbol}`);
         throw new Error(`No ticker data available for symbol: ${symbol}`);
       }
 
       const lastPrice = parseFloat(tickers[0].last_price);
       if (isNaN(lastPrice)) {
-        console.error(
-          `Invalid last price value for symbol: ${symbol}`,
-          tickers[0].last_price,
-        );
         throw new Error(`Invalid last price value for symbol: ${symbol}`);
       }
 
-      console.log(`Last price for symbol ${symbol}: ${lastPrice}`);
       return lastPrice;
     } catch (error: any) {
-      console.error(
-        `Error fetching ticker data for ${symbol}:`,
-        error.message,
-        error.stack,
-      );
       throw new Error(`Failed to fetch ticker data for ${symbol}`);
     }
   }
@@ -482,20 +410,18 @@ export class TradingService {
 
       const available = asset ? parseFloat(asset.available) : 0;
 
-      console.log(
-        `[getAvailableQuantity] Available balance for ${symbol.split("_")[0]}: ${available}`,
-      );
-
       return available;
     } catch (error: unknown) {
       const err = error as any;
-      console.error(
-        "Error fetching available quantity:",
-        err.message || "Unknown error",
-      );
       throw new Error("Failed to fetch available quantity");
     }
   }
+
+  private async getSymbolBalance(userId: number, symbol: string): Promise<number> {
+    const baseCurrency = symbol.split('_')[0];
+    return await this.getAvailableQuantity(userId, symbol);
+  }
+
   /**
    * Floors a number to a specified precision.
    * @param value - The number to floor.
@@ -670,7 +596,8 @@ export class TradingService {
    * @param symbol - The trading symbol in "BASE_QUOTE" format (e.g., "PWC_USDT").
    * @param amount - The amount to invest.
    * @param rebuyPercentage - The percentage to rebuy on conditions.
-   * @param profit   Target - The target profit to achieve before stopping.
+   * @param profitTarget - The target profit to achieve before stopping.
+   * @param profitThresholds - Optional custom thresholds for this trade
    * @returns An object containing trade details.
    */
   public async startTrade(
@@ -679,76 +606,113 @@ export class TradingService {
     amount: number,
     rebuyPercentage: number,
     profitTarget: number,
+    userProfitCheckThreshold?: number,
+    userLossCheckThreshold?: number,
+    profitThresholds?: number[]
   ): Promise<any> {
+    const logger = getUserLogger(userId);
+    const state = this.getUserTradeState(userId);
+
     try {
-      if (!symbol || amount <= 4) {
-        throw new Error(
-          "Invalid symbol or amount. Amount must be greater than 4.",
-        );
+      // Get user's saved thresholds from user entity
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      
+      // Use saved thresholds, fallback to provided or defaults
+      const effectiveProfitThreshold = userProfitCheckThreshold || 
+        user?.profitThreshold || 
+        0.008; // Default 0.8%
+
+      const effectiveLossThreshold = userLossCheckThreshold || 
+        user?.lossThreshold || 
+        0.05;  // Default 5%
+
+      logger.info(`Using thresholds for ${symbol}:`, {
+        profitThreshold: `${(effectiveProfitThreshold * 100).toFixed(2)}%`,
+        lossThreshold: `${(effectiveLossThreshold * 100).toFixed(2)}%`,
+        source: user ? 'Saved Settings' : 'Defaults'
+      });
+
+      // Update state with correct thresholds
+      state.profitCheckThreshold = effectiveProfitThreshold;
+      state.lossCheckThreshold = effectiveLossThreshold;
+
+      // Verify thresholds were set correctly
+      logger.info(`Verified thresholds in state:`, {
+        profitThreshold: `${(state.profitCheckThreshold * 100).toFixed(2)}%`,
+        lossThreshold: `${(state.lossCheckThreshold * 100).toFixed(2)}%`
+      });
+
+      // Initialize state objects
+      if (!state.purchasePrices) {
+        state.purchasePrices = {};
+      }
+      if (!state.monitorIntervals) {
+        state.monitorIntervals = {};
+      }
+      if (!state.activeTrades) {
+        state.activeTrades = [];
       }
 
-      // Fetch user balance
-      const balance = await this.getUserBalance(userId, "USDT"); // Assuming USDT is the quote currency
-      if (balance <= 0) {
-        throw new Error("Insufficient USDT balance to start trade.");
-      }
+      logger.info(`Trade thresholds for ${symbol}:`, {
+        profitTarget: `${(profitTarget * 100).toFixed(2)}%`,
+        profitCheckThreshold: `${(state.profitCheckThreshold * 100).toFixed(2)}%`,
+        lossCheckThreshold: `${(state.lossCheckThreshold * 100).toFixed(2)}%`,
+        rebuyPercentage: `${rebuyPercentage}%`,
+        profitThresholds: profitThresholds || [...state.profitThresholds]
+      });
 
-      if (amount > balance) {
-        throw new Error(
-          `Requested amount (${amount} USDT) exceeds available balance (${balance} USDT).`,
-        );
-      }
-
-      // Fetch the latest price of the symbol
       const lastPrice = await this.fetchTicker(symbol);
-      if (!Number.isFinite(lastPrice) || lastPrice <= 0) {
-        throw new Error(`Invalid last price fetched for symbol: ${symbol}.`);
-      }
-
-      // Calculate purchase quantity
       const purchaseQuantity = amount / lastPrice;
-      if (!Number.isFinite(purchaseQuantity) || purchaseQuantity <= 0) {
-        throw new Error(`Invalid purchase quantity calculated for ${symbol}.`);
-      }
 
-      console.log(
-        `Placing buy order for symbol: ${symbol}, amount: ${amount}, purchaseQuantity: ${purchaseQuantity}`,
-      );
-
-      // Place a buy order with the correct cost
+      // Place buy order
       await this.placeOrder(userId, symbol, "buy", amount);
 
-      console.log(
-        `Buy order placed successfully for symbol: ${symbol}, purchaseQuantity: ${purchaseQuantity}`,
-      );
-
-      const state = this.getUserTradeState(userId);
+      // Save purchase data BEFORE starting monitoring
       state.purchasePrices[symbol] = {
         price: lastPrice,
         timestamp: Date.now(),
         quantity: purchaseQuantity,
+        rebuyPercentage,
+        sold: false,
+        profitThresholds: profitThresholds || [...state.profitThresholds],
       };
-      state.profitTarget = profitTarget;
-      state.accumulatedProfit = 0;
-      state.startDayTimestamp = Date.now();
 
-      // Start continuous monitoring
-      this.startContinuousMonitoring(
+      // Save to active trades
+      if (!state.activeTrades.includes(symbol)) {
+        state.activeTrades.push(symbol);
+      }
+
+      // Update other state properties
+      state.profitTarget = profitTarget;
+
+      // Save state back to storage
+      this.userTrades.set(userId, state);
+
+      logger.info(`Purchase data saved for ${symbol} at price ${lastPrice}`);
+
+      // Start monitoring
+      await this.startContinuousMonitoring(
         userId,
         symbol,
         purchaseQuantity,
-        rebuyPercentage,
+        rebuyPercentage
       );
 
-      return { symbol, amount, remainingBalance: balance - amount };
-    } catch (error: unknown) {
-      const err = error as Error;
-      console.error(
-        `[startTrade] Error starting trade for ${symbol}: ${err.message}`,
-      );
-      throw new Error(`Failed to start trade: ${err.message}`);
+      return {
+        symbol,
+        amount,
+        purchasePrice: lastPrice,
+        purchaseQuantity,
+        profitTarget,
+        isMonitoring: true
+      };
+
+    } catch (error) {
+      logger.error(`Error starting trade: ${(error as Error).message}`);
+      throw error;
     }
   }
+  
 
   /**
    * Calculates profit based on purchase price, quantity, and sell price.
@@ -793,14 +757,36 @@ export class TradingService {
   
     try {
       logger.info(`[checkAndHandleProfit] Starting profit check for user: ${userId}, symbol: ${symbol}`);
-      
-      const purchase = state.purchasePrices[symbol];
-      if (!purchase) {
-        logger.error(`No purchase data found for ${symbol}`);
-        throw new Error(`Purchase data missing for symbol: ${symbol}`);
+      console.log(`[DEBUG][checkAndHandleProfit] Current state:`, {
+        hasPurchasePrices: !!state.purchasePrices,
+        symbolData: state.purchasePrices?.[symbol],
+        quantity,
+        sellPrice
+      });
+  
+      // Initialize purchasePrices if it doesn't exist
+      if (!state.purchasePrices) {
+        state.purchasePrices = {};
       }
   
-      const purchasePrice = purchase.price;
+      const purchase = state.purchasePrices[symbol];
+      if (!purchase) {
+        console.log(`[DEBUG][checkAndHandleProfit] No purchase data found, attempting to recreate state`);
+        
+        // Recreate the purchase data if it's missing
+        state.purchasePrices[symbol] = {
+          price: sellPrice,  // Use the current sell price as the reference
+          timestamp: Date.now(),
+          quantity: quantity,
+          sold: false,
+          rebuyPercentage: 5, // Default value
+          profitThresholds: [...state.profitThresholds]
+        };
+        
+        console.log(`[DEBUG][checkAndHandleProfit] Recreated purchase data:`, state.purchasePrices[symbol]);
+      }
+  
+      const purchasePrice = state.purchasePrices[symbol].price;
       const realizedProfit = (sellPrice - purchasePrice) * quantity;
   
       // Ensure profit values are calculated correctly
@@ -814,6 +800,14 @@ export class TradingService {
       state.accumulatedProfit += roundedProfit;
       state.accumulatedProfit = parseFloat(state.accumulatedProfit.toFixed(2)); // Normalize to two decimals
   
+      console.log(`[DEBUG][checkAndHandleProfit] Profit calculation:`, {
+        purchasePrice,
+        sellPrice,
+        quantity,
+        realizedProfit: roundedProfit,
+        accumulatedProfit: state.accumulatedProfit
+      });
+  
       // Log updated profit
       logger.info(`Accumulated profit updated for user ${userId}: ${state.accumulatedProfit.toFixed(2)} USDT`);
   
@@ -826,7 +820,12 @@ export class TradingService {
         this.stopTrade(userId);
         return;
       }
+
+      // Update this part if it exists
+      const rebuyPercentage = state.purchasePrices[symbol]?.rebuyPercentage || 5;
+      await this.startMonitoringAfterSale(userId, symbol, rebuyPercentage);
     } catch (error) {
+      console.log(`[DEBUG][checkAndHandleProfit] Error:`, error);
       logger.error(
         `Error in checkAndHandleProfit for user ${userId}, symbol ${symbol}: ${(error as Error).message}`
       );
@@ -852,117 +851,219 @@ export class TradingService {
     symbol: string,
     quantity: number,
     rebuyPercentage: number,
-  ) {
+  ): Promise<void> {
     const logger = getUserLogger(userId);
     const state = this.getUserTradeState(userId);
   
-    if (state.monitorIntervals[symbol]) {
-      logger.info(`Clearing existing monitoring interval for ${symbol}.`);
-      clearInterval(state.monitorIntervals[symbol]);
-      delete state.monitorIntervals[symbol];
-    }
-  
-    logger.info(
-      `Starting continuous monitoring for ${symbol} with rebuyPercentage: ${rebuyPercentage}.`,
-    );
-  
-    state.purchasePrices[symbol].sold = false; // Transition to active monitoring
-  
-    state.monitorIntervals[symbol] = setInterval(async () => {
-      try {
-        if (this.isNewDay(state)) {
-          logger.info("A new day has started. Resetting accumulated profit.");
-          state.accumulatedProfit = 0;
-          state.startDayTimestamp = Date.now();
-        }
-  
-        const currentPrice = await this.fetchTicker(symbol);
-        logger.info(`Current price for ${symbol}: ${currentPrice}`);
-        state.lastRecordedPrices[symbol] = currentPrice;
-  
-        const purchase = state.purchasePrices[symbol];
-        if (!purchase) {
-          logger.info(`Purchase price not found for symbol: ${symbol}`);
-          return;
-        }
-  
-        const residualValue = purchase.quantity * currentPrice;
-        if (residualValue < 1.0) {
-          logger.info(
-            `Residual value (${residualValue.toFixed(
-              2,
-            )} USDT) is below threshold.`,
-          );
-          purchase.quantity = 0;
-          purchase.sold = true;
-          clearInterval(state.monitorIntervals[symbol]);
-          return;
-        }
-  
-        const purchasePrice = purchase.price;
-        const priceDrop = (purchasePrice - currentPrice) / purchasePrice;
-        const profit = (currentPrice - purchasePrice) / purchasePrice;
-  
-        logger.info(`Purchase price for ${symbol}: ${purchasePrice}`);
-        logger.info(`Price drop for ${symbol}: ${(priceDrop * 100).toFixed(2)}%`);
-        logger.info(`Current profit for ${symbol}: ${(profit * 100).toFixed(2)}%`);
-        console.log(`Purchase price for ${symbol}: ${purchasePrice}`);
-        if (priceDrop >= 0.05) {
-          logger.info(`Price dropped by 5% or more for ${symbol}. Selling.`);
-          await this.placeOrder(userId, symbol, "sell", quantity);
-          await this.ensureSellCompleted(userId, symbol, quantity);
-          await this.checkAndHandleProfit(userId, symbol, quantity, currentPrice);
-          state.purchasePrices[symbol] = {
-            ...state.purchasePrices[symbol],
-            price: currentPrice,
-            quantity: 0,
-            sold: true,
-          };
-          logger.info(
-            `Waiting for 15 seconds before starting monitorAfterSale for ${symbol}.`,
-          );
-          setTimeout(() => {
-            this.monitorAfterSale(
-              userId,
-              symbol,
-              quantity,
-              currentPrice,
-              rebuyPercentage,
-            );
-          }, 15000);
-        } else if (profit >= 0.05) {
-          logger.info(`Profit of 5% or more for ${symbol}. Selling.`);
-          await this.placeOrder(userId, symbol, "sell", quantity);
-          await this.ensureSellCompleted(userId, symbol, quantity);
-          await this.checkAndHandleProfit(userId, symbol, quantity, currentPrice);
-          state.purchasePrices[symbol] = {
-            ...state.purchasePrices[symbol],
-            sold: true,
-          };
-          logger.info(
-            `Waiting for 15 seconds before starting monitorAfterSale for ${symbol}.`,
-          );
-          setTimeout(() => {
-            this.monitorAfterSale(
-              userId,
-              symbol,
-              quantity,
-              currentPrice,
-              rebuyPercentage,
-            );
-          }, 15000);
-        } else if (state.accumulatedProfit >= state.profitTarget) {
-          logger.info(`Accumulated profit target reached for ${symbol}. Selling.`);
-          await this.placeOrder(userId, symbol, "sell", quantity);
-          this.stopTrade(userId);
-        }
-      } catch (error) {
-        logger.error(
-          "Error checking price and selling: " + (error as Error).message,
-        );
+    try {
+      // IMPORTANT: Clear ALL existing monitoring first
+      if (state.afterSaleMonitorIntervals?.[symbol]) {
+        clearInterval(state.afterSaleMonitorIntervals[symbol]);
+        delete state.afterSaleMonitorIntervals[symbol];
+        logger.info(`[startContinuousMonitoring] Forcefully cleared after-sale monitoring for ${symbol}`);
       }
-    }, 5000);
-  }  
+
+      if (state.monitorIntervals?.[symbol]) {
+        clearInterval(state.monitorIntervals[symbol]);
+        delete state.monitorIntervals[symbol];
+      }
+
+      // Verify monitoring is cleared
+      if (state.afterSaleMonitorIntervals?.[symbol] || state.monitorIntervals?.[symbol]) {
+        logger.warn(`[startContinuousMonitoring] Detected lingering monitors for ${symbol}. Force clearing.`);
+        state.afterSaleMonitorIntervals = {};
+        state.monitorIntervals = {};
+      }
+
+      // Start new monitoring
+      state.monitorIntervals[symbol] = setInterval(async () => {
+        try {
+          const currentPrice = await this.fetchTicker(symbol);
+          const purchase = state.purchasePrices[symbol];
+
+          if (!purchase || purchase.sold) {
+            clearInterval(state.monitorIntervals[symbol]);
+            delete state.monitorIntervals[symbol];
+            logger.info(`Continuous monitoring stopped for ${symbol}`);
+            return;
+          }
+
+          const purchasePrice = purchase.price;
+          const priceChange = ((currentPrice - purchasePrice) / purchasePrice) * 100;
+
+          // Separate profit and loss display
+          const statusLog = `${symbol} - Price: ${currentPrice} | Buy: ${purchasePrice} | ${
+            priceChange >= 0 
+              ? `Profit: ${priceChange.toFixed(2)}% | Loss: 0.00%`
+              : `Profit: 0.00% | Loss: ${Math.abs(priceChange).toFixed(2)}%`
+          } | Targets: +${(state.profitCheckThreshold * 100).toFixed(2)}% / -${(state.lossCheckThreshold * 100).toFixed(2)}%`;
+
+          logger.info(statusLog);
+
+          if (priceChange >= (state.profitCheckThreshold * 100)) {
+            logger.info(`Profit target reached for ${symbol}. Selling.`);
+            
+            // Stop continuous monitoring before selling
+            clearInterval(state.monitorIntervals[symbol]);
+            delete state.monitorIntervals[symbol];
+            
+            await this.placeOrder(userId, symbol, "sell", quantity);
+            await this.ensureSellCompleted(userId, symbol, quantity);
+            await this.checkAndHandleProfit(userId, symbol, quantity, currentPrice);
+            
+            // Transition to monitoring after sale
+            await this.startMonitoringAfterSale(userId, symbol, rebuyPercentage);
+            return;
+          } else if (Math.abs(priceChange) >= (state.lossCheckThreshold * 100)) {
+            logger.info(`Loss threshold reached for ${symbol}. Selling.`);
+            
+            // Stop continuous monitoring before selling
+            clearInterval(state.monitorIntervals[symbol]);
+            delete state.monitorIntervals[symbol];
+            
+            await this.placeOrder(userId, symbol, "sell", quantity);
+            await this.ensureSellCompleted(userId, symbol, quantity);
+            await this.checkAndHandleProfit(userId, symbol, quantity, currentPrice);
+            
+            // Transition to monitoring after sale
+            await this.startMonitoringAfterSale(userId, symbol, rebuyPercentage);
+            return;
+          }
+
+        } catch (error) {
+          logger.error(`Error in continuous monitoring for ${symbol}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }, 5000);
+
+      // Save clean state
+      this.userTrades.set(userId, state);
+      logger.info(`[startContinuousMonitoring] Successfully started new monitoring for ${symbol}`);
+    } catch (error) {
+      logger.error(`Failed to start continuous monitoring for ${symbol}: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+  }
+
+  private async startMonitoringAfterSale(
+    userId: number,
+    symbol: string,
+    rebuyPercentage: number
+  ): Promise<void> {
+    const logger = getUserLogger(userId);
+    const state = this.getUserTradeState(userId);
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    
+    // Get user's configured thresholds or use defaults
+    const profitThreshold = (user?.afterSaleProfitThreshold ?? 0.2) * 100;  // Convert to percentage
+    const lossThreshold = (user?.afterSaleLossThreshold ?? 0.35) * 100;
+
+    try {
+      const initialPrice = await this.fetchTickerWithRetry(symbol);
+      
+      // Clear any existing after-sale monitoring first
+      if (state.afterSaleMonitorIntervals?.[symbol]) {
+        clearInterval(state.afterSaleMonitorIntervals[symbol]);
+        delete state.afterSaleMonitorIntervals[symbol];
+      }
+
+      state.afterSaleMonitorIntervals[symbol] = setInterval(async () => {
+        try {
+          const currentPrice = await this.fetchTickerWithRetry(symbol);
+          if (!currentPrice || isNaN(currentPrice)) return;
+
+          const priceChange = ((currentPrice - initialPrice) / initialPrice) * 100;
+          
+          logger.info(
+            `After-Sale Monitor ${symbol} - Current: ${currentPrice.toFixed(5)} | ` +
+            `Initial: ${initialPrice.toFixed(5)} | Change: ${priceChange.toFixed(2)}% | ` +
+            `Rebuy at: +${profitThreshold}% / -${lossThreshold}%`
+          );
+
+          // If rebuy conditions met, FIRST clear the interval, THEN execute rebuy
+          if (this.shouldRebuy(priceChange, profitThreshold, lossThreshold)) {
+            // Clear interval BEFORE executing rebuy
+            clearInterval(state.afterSaleMonitorIntervals[symbol]);
+            delete state.afterSaleMonitorIntervals[symbol];
+            this.userTrades.set(userId, state);
+            
+            logger.info(`[startMonitoringAfterSale] Cleared monitoring before rebuy for ${symbol}`);
+            
+            // Small delay to ensure interval is cleared
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // Now execute rebuy
+            await this.executeRebuy(userId, symbol, currentPrice, rebuyPercentage);
+            return;
+          }
+        } catch (error) {
+          logger.error(`Error in after-sale monitoring for ${symbol}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }, 5000);
+
+      this.userTrades.set(userId, state);
+      logger.info(`Started after-sale monitoring for ${symbol}`);
+    } catch (error) {
+      logger.error(`Failed to start after-sale monitoring for ${symbol}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async executeRebuy(
+    userId: number,
+    symbol: string,
+    currentPrice: number,
+    rebuyPercentage: number
+  ): Promise<void> {
+    const logger = getUserLogger(userId);
+    const state = this.getUserTradeState(userId);
+
+    try {
+      // CRITICAL: Clear ALL monitoring before proceeding
+      if (state.afterSaleMonitorIntervals?.[symbol]) {
+        clearInterval(state.afterSaleMonitorIntervals[symbol]);
+        delete state.afterSaleMonitorIntervals[symbol];
+        // Clear the entire object to ensure no lingering references
+        state.afterSaleMonitorIntervals = {};
+        logger.info(`[executeRebuy] Forcefully cleared all after-sale monitoring`);
+        
+        // Save state immediately after clearing
+        this.userTrades.set(userId, state);
+        
+        // Add delay to ensure interval is cleared
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      const availableBalance = await this.getUserBalance(userId);
+      const amountToRebuy = Math.max(5, (availableBalance * rebuyPercentage) / 100);
+
+      if (amountToRebuy <= availableBalance) {
+        await this.placeOrder(userId, symbol, "buy", amountToRebuy);
+        logger.info(`Rebuy executed for ${symbol} - Amount: ${amountToRebuy} USDT`);
+
+        // Update state
+        state.purchasePrices[symbol] = {
+          price: currentPrice,
+          timestamp: Date.now(),
+          quantity: amountToRebuy / currentPrice,
+          sold: false,
+          rebuyPercentage,
+          profitThresholds: [...state.profitThresholds]
+        };
+
+        // Verify no after-sale monitoring exists before starting continuous
+        if (state.afterSaleMonitorIntervals?.[symbol]) {
+          logger.warn(`[executeRebuy] Detected lingering after-sale monitor, clearing again`);
+          clearInterval(state.afterSaleMonitorIntervals[symbol]);
+          state.afterSaleMonitorIntervals = {};
+        }
+
+        // Start new monitoring
+        await this.startContinuousMonitoring(userId, symbol, amountToRebuy / currentPrice, rebuyPercentage);
+      }
+    } catch (error) {
+      logger.error(`Failed to execute rebuy for ${symbol}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   /**
    * Waits for skyrocketing profit conditions and handles selling.
    * @param userId - The ID of the user.
@@ -1013,250 +1114,49 @@ export class TradingService {
     setTimeout(async () => clearInterval(checkSkyrocketingProfit), 240000); // Stop after 4 minutes
   }
 
-  /**
-   * Monitors after a sale to potentially rebuy based on market conditions.
-   * @param userId - The ID of the user.
-   * @param symbol - The trading symbol.
-   * @param quantity - The quantity bought.
-   * @param sellPrice - The price at which the asset was sold.
-   * @param rebuyPercentage - The percentage to rebuy on conditions.
-   */
-  private async monitorAfterSale(
-    userId: number,
-    symbol: string,
-    quantity: number,
-    sellPrice: number,
-    rebuyPercentage: number,
-  ): Promise<void> {
-    const logger = getUserLogger(userId); // Retrieve user-specific logger
-    const state = this.getUserTradeState(userId); // Get user-specific state
 
-    // Mark trade as monitoring after sale in the user state
-    if (!state.purchasePrices[symbol]) {
-      state.purchasePrices[symbol] = {
-        price: sellPrice,
-        timestamp: Date.now(),
-        quantity,
-        sold: true,
-      };
-    } else {
-      state.purchasePrices[symbol].sold = true;
+public async stopTrade(userId: number): Promise<void> {
+  const logger = getUserLogger(userId);
+  const state = this.getUserTradeState(userId);
+
+  try {
+    logger.info(`Stopping all trading activities for user ${userId}.`);
+
+    // Clear regular monitoring intervals
+    for (const symbol in state.monitorIntervals) {
+      clearInterval(state.monitorIntervals[symbol]);
+      delete state.monitorIntervals[symbol];
+      logger.info(`Cleared monitoring interval for ${symbol}`);
     }
 
-    logger.info(`Monitoring after sale for ${symbol}.`);
+    // Clear after-sale monitoring intervals
+    if (state.afterSaleMonitorIntervals) {
+      for (const symbol in state.afterSaleMonitorIntervals) {
+        clearInterval(state.afterSaleMonitorIntervals[symbol]);
+        delete state.afterSaleMonitorIntervals[symbol];
+        logger.info(`Cleared after-sale monitoring interval for ${symbol}`);
+      }
+    }
 
-    const startRebuyMonitoring = async (
-      currentSymbol: string,
-      quantity: number,
-      rebuyPercentage: number,
-    ) => {
-      logger.info(
-        `Starting rebuy monitoring for ${currentSymbol} with quantity: ${quantity}, sellPrice: ${sellPrice}, rebuyPercentage: ${rebuyPercentage}`,
-      );
-    
-      let initialPrice: number = await this.fetchTicker(currentSymbol);
-      if (initialPrice === undefined || isNaN(initialPrice)) {
-        logger.error(`Initial price for ${currentSymbol} is invalid or undefined.`);
-        return;
-      }
-      logger.info(`Initial price for ${currentSymbol}: ${initialPrice}`);
-    
-      const checkRebuyInterval = setInterval(async () => {
-        try {
-          const currentPrice = await this.fetchTicker(currentSymbol);
-          if (currentPrice === undefined || isNaN(currentPrice)) {
-            logger.error(
-              `Current price for ${currentSymbol} is invalid or undefined.`,
-            );
-            return;
-          }
-          logger.info(`Current price for ${currentSymbol}: ${currentPrice}`);
-    
-          const priceIncrease = (currentPrice - initialPrice) / initialPrice;
-          const priceDrop = (initialPrice - currentPrice) / initialPrice;
-    
-          logger.info(
-            `Price change for ${currentSymbol}: Increase: ${(priceIncrease * 100).toFixed(2)}%, Drop: ${(priceDrop * 100).toFixed(2)}%`,
-          );
-    
-          if (priceIncrease >= 0.002) {
-            logger.info(`Price increased by 0.2% or more for ${currentSymbol}.`);
-    
-            const availableBalance = await this.getUserBalance(userId);
-            logger.info(`User balance: ${availableBalance}`);
-    
-            const amountToRebuy = (availableBalance * rebuyPercentage) / 100;
-            const rebuyQuantity = amountToRebuy / currentPrice;
-    
-            if (
-              rebuyQuantity > 0 &&
-              rebuyQuantity * currentPrice <= availableBalance
-            ) {
-              await this.placeOrder(userId, currentSymbol, "buy", amountToRebuy);
-              logger.info(
-                `Buy order placed for ${currentSymbol} with cost: ${amountToRebuy} USDT`,
-              );
-    
-              state.purchasePrices[currentSymbol] = {
-                price: currentPrice,
-                timestamp: Date.now(),
-                quantity: rebuyQuantity,
-                sold: false, // Transition to active monitoring
-              };
-    
-              clearInterval(checkRebuyInterval);
-    
-              this.startContinuousMonitoring(
-                userId,
-                currentSymbol,
-                rebuyQuantity,
-                rebuyPercentage,
-              );
-            }
-          } else if (priceDrop >= 0.05) {
-            logger.info(`Price dropped by 5% or more for ${currentSymbol}.`);
-    
-            const availableBalance = await this.getUserBalance(userId);
-            const amountToRebuy = (availableBalance * rebuyPercentage) / 100;
-            const rebuyQuantity = amountToRebuy / currentPrice;
-    
-            if (
-              rebuyQuantity > 0 &&
-              rebuyQuantity * currentPrice <= availableBalance
-            ) {
-              await this.placeOrder(userId, currentSymbol, "buy", amountToRebuy);
-              logger.info(
-                `Buy order placed for ${currentSymbol} with cost: ${amountToRebuy} USDT`,
-              );
-    
-              state.purchasePrices[currentSymbol] = {
-                price: currentPrice,
-                timestamp: Date.now(),
-                quantity: rebuyQuantity,
-                sold: false, // Transition to active monitoring
-              };
-    
-              clearInterval(checkRebuyInterval);
-    
-              this.startContinuousMonitoring(
-                userId,
-                currentSymbol,
-                rebuyQuantity,
-                rebuyPercentage,
-              );
-            }
-          }
-    
-          const timeElapsed =
-            Date.now() - (state.purchasePrices[currentSymbol]?.timestamp || 0);
-          if (timeElapsed >= 210000 && currentPrice !== undefined) {
-            initialPrice = currentPrice; // Safely reassign to a valid currentPrice
-          }
-        } catch (error) {
-          logger.error(
-            `log: ${(error as Error).message}`,
-          );
-        }
-      }, 8000);
-    
-      state.activeMonitoringIntervals[currentSymbol] = checkRebuyInterval;
-    
-      setTimeout(async () => {
-        if (
-          !state.purchasePrices[currentSymbol] ||
-          Date.now() - state.purchasePrices[currentSymbol].timestamp >= 3600000
-        ) {
-          logger.info(
-            `1 hour elapsed without rebuying ${currentSymbol}. Buying into the top trending coin for the day.`,
-          );
-    
-          const trendingCoins = await getTopTrendingCoinsForTheDay();
-          if (trendingCoins.length > 0) {
-            const topTrendingCoin = trendingCoins[0].symbol;
-            const availableBalance = await this.getUserBalance(userId);
-            const currentPrice = await this.fetchTicker(topTrendingCoin);
-    
-            if (currentPrice !== undefined && !isNaN(currentPrice)) {
-              const amountToRebuy = (availableBalance * rebuyPercentage) / 100;
-              const rebuyQuantity = amountToRebuy / currentPrice;
-    
-              if (
-                rebuyQuantity > 0 &&
-                rebuyQuantity * currentPrice <= availableBalance
-              ) {
-                await this.placeOrder(
-                  userId,
-                  topTrendingCoin,
-                  "buy",
-                  amountToRebuy,
-                );
-                state.purchasePrices[topTrendingCoin] = {
-                  price: currentPrice,
-                  timestamp: Date.now(),
-                  quantity: rebuyQuantity,
-                  sold: false,
-                };
-                this.startContinuousMonitoring(
-                  userId,
-                  topTrendingCoin,
-                  rebuyQuantity,
-                  rebuyPercentage,
-                );
-              }
-            }
-          }
-          clearInterval(state.activeMonitoringIntervals[currentSymbol]);
-          delete state.activeMonitoringIntervals[currentSymbol];
-        }
-      }, 3600000); // Stop after 1 hour
-    };    
-
-    // Start the rebuy monitoring
-    startRebuyMonitoring(symbol, quantity, rebuyPercentage);
-  }
-  public stopTrade(userId: number): void {
-    const logger = getUserLogger(userId);
-    const state = this.getUserTradeState(userId);
-  
-    logger.info(`Stopping all trading activities for user ${userId}.`);
-  
-    // Clear monitorIntervals for this user
-    Object.keys(state.monitorIntervals).forEach((symbol) => {
-      const interval = state.monitorIntervals[symbol];
-      if (interval) {
-        clearInterval(interval);
-        delete state.monitorIntervals[symbol];
-        logger.info(`Cleared monitorInterval for symbol: ${symbol}`);
-      }
-    });
-  
-    // Clear activeMonitoringIntervals for this user
-    Object.keys(state.activeMonitoringIntervals).forEach((symbol) => {
-      const interval = state.activeMonitoringIntervals[symbol];
-      if (interval) {
-        clearInterval(interval);
-        delete state.activeMonitoringIntervals[symbol];
-        logger.info(`Cleared activeMonitoringInterval for symbol: ${symbol}`);
-      }
-    });
-  
-    // Remove the stopped trades from purchasePrices (or mark them as sold)
-    Object.keys(state.purchasePrices).forEach((symbol) => {
-      const purchase = state.purchasePrices[symbol];
-      if (purchase) {
-        purchase.sold = true; // Mark as sold
-        purchase.quantity = 0; // Clear quantity
-      }
-      delete state.purchasePrices[symbol]; // Remove the purchase record
-    });
-  
-    // Clear accumulated profit and reset user state
+    // Clear all state
+    state.monitorIntervals = {};
+    state.afterSaleMonitorIntervals = {};
+    state.purchasePrices = {};
+    state.profitTarget = 0;
     state.accumulatedProfit = 0;
     state.startDayTimestamp = Date.now();
-  
-    logger.info(`All trading activities stopped for user ${userId}.`);
+    state.activeTrades = [];
+
+    // Save cleared state
+    this.userTrades.set(userId, state);
+
+    logger.info('All trading activities stopped successfully');
+  } catch (error) {
+    logger.error(`Error stopping trading for user ${userId}: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
   }
-  
+}
+
   /**
    * Retrieves the profit target.
    * @returns The profit target.
@@ -1305,6 +1205,40 @@ export class TradingService {
  * @param userId - The ID of the user.
  * @param symbol - The trading symbol in "BASE_QUOTE" format (e.g., "PWC_USDT").
  */
+private async confirmSellAndStartMonitoring(
+  userId: number,
+  symbol: string,
+  quantityToSell: number,
+  rebuyPercentage: number
+): Promise<void> {
+  const logger = getUserLogger(userId);
+  const state = this.getUserTradeState(userId);
+
+  try {
+    // Get remaining balance
+    const remainingQuantity = await this.getSymbolBalance(userId, symbol);
+    
+    if (remainingQuantity < 0.1) {
+      logger.info(`Sell confirmed for ${symbol}. Starting after-sale monitoring.`);
+      
+      // Update state
+      if (state.purchasePrices[symbol]) {
+        state.purchasePrices[symbol].sold = true;
+        state.purchasePrices[symbol].quantity = 0;
+      }
+
+      // Start monitoring immediately
+      await this.startMonitoringAfterSale(userId, symbol, rebuyPercentage);
+      return;
+    }
+
+    throw new Error(`Sell not confirmed for ${symbol}. Remaining quantity: ${remainingQuantity}`);
+  } catch (error) {
+    logger.error(`Error confirming sell: ${(error as Error).message}`);
+    throw error;
+  }
+}
+
 public async sellNow(userId: number, symbol: string): Promise<void> {
   const logger = getUserLogger(userId);
   const state = this.getUserTradeState(userId);
@@ -1312,52 +1246,231 @@ public async sellNow(userId: number, symbol: string): Promise<void> {
   try {
     logger.info(`[sellNow] User ${userId} requested to sell ${symbol} immediately.`);
 
+    // Get current purchase data before modifying state
     const purchase = state.purchasePrices[symbol];
     if (!purchase || purchase.quantity <= 0) {
       throw new Error(`No active trade found for symbol: ${symbol}`);
     }
 
     const quantityToSell = purchase.quantity;
-    const currentPrice = await this.fetchTicker(symbol);
-
-    if (currentPrice === undefined || isNaN(currentPrice)) {
-      throw new Error(`Failed to fetch current price for ${symbol}`);
-    }
-
-    logger.info(`[sellNow] Current price for ${symbol}: ${currentPrice}. Proceeding with sell.`);
-
-    // Stop continuous monitoring for this symbol
+    const rebuyPercentage = purchase.rebuyPercentage || 5;
+    
+    // Stop continuous monitoring first
     if (state.monitorIntervals[symbol]) {
       clearInterval(state.monitorIntervals[symbol]);
       delete state.monitorIntervals[symbol];
       logger.info(`[sellNow] Continuous monitoring stopped for ${symbol}.`);
     }
 
-    // Place the sell order
+    // Place sell order
     await this.placeOrder(userId, symbol, "sell", quantityToSell);
-    await this.ensureSellCompleted(userId, symbol, quantityToSell);
 
-    // --------------------------------------------
-    //   IMPORTANT: Update accumulated profit here
-    // --------------------------------------------
-    await this.checkAndHandleProfit(userId, symbol, quantityToSell, currentPrice);
+    // Quick sell confirmation
+    const remainingQuantity = await this.getSymbolBalance(userId, symbol);
+    if (remainingQuantity < 0.1) {
+      logger.info(`Sell confirmed for ${symbol}. Starting after-sale monitoring immediately.`);
+      
+      // Start monitoring before updating state
+      await this.startMonitoringAfterSale(userId, symbol, rebuyPercentage);
 
-    logger.info(`[sellNow] Sell order completed for ${symbol}. Transitioning to monitoring after sale.`);
+      // Update state after monitoring is started
+      state.purchasePrices[symbol] = {
+        ...purchase,
+        sold: true,
+        quantity: 0
+      };
 
-    // Mark the trade as sold in the user state
-    state.purchasePrices[symbol] = {
-      ...state.purchasePrices[symbol],
-      quantity: 0,
-      sold: true,
-    };
+      // Try to calculate profit
+      try {
+        const currentPrice = await this.fetchTickerWithRetry(symbol);
+        if (currentPrice) {
+          await this.checkAndHandleProfit(userId, symbol, quantityToSell, currentPrice);
+        }
+      } catch (error) {
+        logger.warn(`Unable to calculate profit immediately: ${(error as Error).message}. Will retry during monitoring.`);
+      }
+    } else {
+      throw new Error(`Sell not confirmed for ${symbol}. Remaining quantity: ${remainingQuantity}`);
+    }
 
-    // Transition to after-sale monitoring logic
-    this.monitorAfterSale(userId, symbol, quantityToSell, currentPrice, state.profitTarget);
-
-    logger.info(`[sellNow] Monitoring after sale started for ${symbol}.`);
   } catch (error) {
-    logger.error(`[sellNow] Error processing immediate sell for ${symbol}: ${(error as Error).message}`);
+    logger.error(`[sellNow] Error: ${(error as Error).message}`);
     throw error;
   }
+}
+
+public async buyNow(
+  userId: number,
+  symbol: string,
+  percentage: number
+): Promise<void> {
+  const logger = getUserLogger(userId);
+  const state = this.getUserTradeState(userId);
+
+  try {
+    // FIRST: Clear any existing monitoring
+    if (state.afterSaleMonitorIntervals?.[symbol]) {
+      clearInterval(state.afterSaleMonitorIntervals[symbol]);
+      delete state.afterSaleMonitorIntervals[symbol];
+      logger.info(`[buyNow] Cleared after-sale monitoring for ${symbol}`);
+    }
+
+    if (state.monitorIntervals?.[symbol]) {
+      clearInterval(state.monitorIntervals[symbol]);
+      delete state.monitorIntervals[symbol];
+      logger.info(`[buyNow] Cleared existing monitoring for ${symbol}`);
+    }
+
+    const currentPrice = await this.fetchTickerWithRetry(symbol);
+    const availableBalance = await this.getUserBalance(userId);
+    const amount = (availableBalance * percentage) / 100;
+
+    await this.placeOrder(userId, symbol, "buy", amount);
+    
+    // Update state with new purchase
+    state.purchasePrices[symbol] = {
+      price: currentPrice,
+      timestamp: Date.now(),
+      quantity: amount / currentPrice,
+      sold: false,
+      rebuyPercentage: percentage,
+      profitThresholds: [...state.profitThresholds]
+    };
+
+    // Save state before starting new monitoring
+    this.userTrades.set(userId, state);
+
+    // Start continuous monitoring
+    await this.startContinuousMonitoring(userId, symbol, amount / currentPrice, percentage);
+    
+    logger.info(`Manual buy executed for ${symbol} - Amount: ${amount} USDT`);
+  } catch (error) {
+    logger.error(`Failed to execute manual buy for ${symbol}: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
+  }
+}
+
+private initializeTradeState(userId: number): UserTradeState {
+  const newState: UserTradeState = {
+    lastRecordedPrices: {},
+    purchasePrices: {},
+    profitTarget: 0,
+    accumulatedProfit: 0,
+    startDayTimestamp: Date.now(),
+    payloadLogs: {},
+    monitorIntervals: {},
+    activeMonitoringIntervals: {},
+    profitCheckThreshold: 0.008,    // Default 0.8% profit
+    lossCheckThreshold: 0.006,      // Default 0.6% loss
+    afterSaleProfitThreshold: 0.01,   // Default 1% profit for rebuy
+    afterSaleLossThreshold: 0.01,    // Default 1% loss for rebuy
+    profitThresholds: [...this.DEFAULT_PROFIT_THRESHOLDS],
+    activeTrades: [],
+    afterSaleMonitorIntervals: {},
+  };
+  this.userTradeStates.set(userId, newState);
+  return newState;
+}
+
+public async setUserThresholds(
+  userId: number,
+  profitThreshold: number,
+  lossThreshold: number
+): Promise<void> {
+  const logger = getUserLogger(userId);
+  try {
+    // Convert percentages to decimals if needed
+    const normalizedProfitThreshold = profitThreshold > 1 ? profitThreshold / 100 : profitThreshold;
+    const normalizedLossThreshold = lossThreshold > 1 ? lossThreshold / 100 : lossThreshold;
+
+    // Find user first, then update
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) throw new Error('User not found');
+
+    user.profitThreshold = normalizedProfitThreshold;
+    user.lossThreshold = normalizedLossThreshold;
+    user.thresholds_updated_at = new Date();
+
+    await this.userRepository.save(user);
+
+    logger.info(`User thresholds saved:`, {
+      profitThreshold: `${(normalizedProfitThreshold * 100).toFixed(2)}%`,
+      lossThreshold: `${(normalizedLossThreshold * 100).toFixed(2)}%`
+    });
+  } catch (error) {
+    logger.error(`Failed to save user thresholds: ${(error as Error).message}`);
+    throw error;
+  }
+}
+
+public async setAfterSaleThresholds(
+  userId: number,
+  profitThreshold: number,
+  lossThreshold: number
+): Promise<void> {
+  const user = await this.userRepository.findOne({ where: { id: userId } });
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  // Convert to decimal if received as percentage
+  const normalizedProfitThreshold = profitThreshold > 1 ? profitThreshold / 100 : profitThreshold;
+  const normalizedLossThreshold = lossThreshold > 1 ? lossThreshold / 100 : lossThreshold;
+
+  // Update user's after-sale thresholds
+  user.afterSaleProfitThreshold = normalizedProfitThreshold;
+  user.afterSaleLossThreshold = normalizedLossThreshold;
+
+  // Save to database
+  await this.userRepository.save(user);
+
+  // Log the update
+  this.logger.log(`Updated after-sale thresholds for user ${userId}:`, {
+    profitThreshold: normalizedProfitThreshold,
+    lossThreshold: normalizedLossThreshold
+  });
+}
+
+private async fetchTickerWithRetry(
+  symbol: string,
+  maxRetries: number = 3,
+  delayMs: number = 1000
+): Promise<number> {
+  const logger = getUserLogger(0);
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const price = await this.fetchTicker(symbol);
+      if (price && !isNaN(price)) {
+        return price;
+      }
+      throw new Error(`Invalid price received for ${symbol}`);
+    } catch (error) {
+      lastError = error as Error;
+      logger.warn(`Attempt ${attempt}/${maxRetries} failed to fetch ticker for ${symbol}: ${(error as Error).message}`);
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw new Error(`Failed to fetch ticker after ${maxRetries} attempts: ${lastError?.message}`);
+}
+public async getUserThresholds(userId: number) {
+  const user = await this.userRepository.findOne({ where: { id: userId } });
+  if (!user) {
+    throw new Error('User not found');
+  }
+  
+  return {
+    profitThreshold: user.profitThreshold,
+    lossThreshold: user.lossThreshold,
+    afterSaleProfitThreshold: user.afterSaleProfitThreshold,
+    afterSaleLossThreshold: user.afterSaleLossThreshold
+  };
+}
+
+private shouldRebuy(priceChange: number, profitThreshold: number, lossThreshold: number): boolean {
+  return priceChange >= profitThreshold || Math.abs(priceChange) >= lossThreshold;
 }
 }

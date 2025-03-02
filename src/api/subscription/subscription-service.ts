@@ -388,4 +388,56 @@ export class SubscriptionService {
       this.logger.error("Error during subscription renewal check:", error);
     }
   }
+
+  @Cron(CronExpression.EVERY_MINUTE)
+  async deactivateExpiredSubscriptions(): Promise<void> {
+    try {
+      this.logger.log('Checking for expired subscriptions...');
+      const expiredUsers = await this.userRepository.findExpiredSubscriptions();
+
+      if (expiredUsers.length > 0) {
+        this.logger.log(`Found ${expiredUsers.length} expired subscriptions`);
+        
+        for (const user of expiredUsers) {
+          user.has_subscription = false;
+          await this.userRepository.save(user);
+          this.logger.log(`Deactivated subscription for user ${user.email}`);
+        }
+      }
+    } catch (error) {
+      this.logger.error('Error deactivating expired subscriptions:', error);
+    }
+  }
+
+  public async isSubscriptionActive(userId: number): Promise<boolean> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      const now = new Date();
+      const expiryDate = user.subscription_expiry ? new Date(user.subscription_expiry) : null;
+      
+      // Log for debugging
+      this.logger.debug(`Checking subscription for user ${userId}:`);
+      this.logger.debug(`Current time: ${now.toISOString()}`);
+      this.logger.debug(`Expiry date: ${expiryDate?.toISOString()}`);
+      
+      const isExpired = expiryDate && now > expiryDate;
+
+      if (isExpired && user.has_subscription) {
+        // Update subscription status
+        user.has_subscription = false;
+        await this.userRepository.save(user);
+        this.logger.log(`Subscription marked as inactive for user: ${user.email}`);
+        return false;
+      }
+
+      return user.has_subscription && !isExpired;
+    } catch (error) {
+      this.logger.error(`Error checking subscription status: ${error}`);
+      return false;
+    }
+  }
 }

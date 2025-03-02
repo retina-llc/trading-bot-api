@@ -204,4 +204,11 @@ export class UserRepository {
       throw error;
     }
   }
+
+  async findExpiredSubscriptions(): Promise<User[]> {
+    return this.userRepository.createQueryBuilder('user')
+      .where('user.subscription_expiry < :now', { now: new Date() })
+      .andWhere('user.has_subscription = :active', { active: true })
+      .getMany();
+  }
 }

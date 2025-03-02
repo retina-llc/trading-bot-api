@@ -1,11 +1,20 @@
 import { Injectable, InternalServerErrorException } from "@nestjs/common";
 import * as fs from "fs";
 import * as path from "path";
+import { Logger } from "@nestjs/common";
 
 @Injectable()
 export class LogService {
-  private readonly logsDirectory = path.join(__dirname, "..", "logs");
+  private readonly logger = new Logger(LogService.name);
+  private readonly logsDirectory: string;
   private readonly maxLogs = 200; // Limit to 200 logs per user
+
+  constructor() {
+    // Resolve absolute path for production
+    this.logsDirectory = process.env.NODE_ENV === 'production' 
+      ? '/home/ubuntu/app/dist/logs'
+      : path.join(__dirname, '..', 'logs');
+  }
 
   private formatTimestamp(timestamp: string): string {
     const date = new Date(timestamp);
@@ -33,41 +42,35 @@ export class LogService {
    */
   async writeLog(userId: number, logEntry: string): Promise<void> {
     const logFilePath = path.join(this.logsDirectory, `user-${userId}.log`);
-    console.log(`[writeLog] Logs directory: ${this.logsDirectory}`);
-    console.log(`[writeLog] Log file path for user ${userId}: ${logFilePath}`);
 
     try {
+      // Ensure logs directory exists
       if (!fs.existsSync(this.logsDirectory)) {
-        console.log("[writeLog] Logs directory does not exist. Creating it...");
         fs.mkdirSync(this.logsDirectory, { recursive: true });
       }
 
+      // Read existing logs
       let logs: string[] = [];
       if (fs.existsSync(logFilePath)) {
-        console.log(`[writeLog] Existing log file found for user ${userId}`);
         const existingLogs = fs.readFileSync(logFilePath, "utf8");
-        logs = existingLogs.split("\n").filter((entry) => entry.trim() !== "");
-      } else {
-        console.log(`[writeLog] No existing log file for user ${userId}`);
+        logs = existingLogs.split("\n").filter(entry => entry.trim() !== "");
       }
 
-      // Add the new log entry
-      logs.push(logEntry);
-      console.log(`[writeLog] Added new log entry for user ${userId}: ${logEntry}`);
+      // Add new log entry
+      logs.push(this.formatLogEntry(logEntry));
 
-      // Trim to the last `maxLogs` entries
+      // Strictly enforce the maxLogs limit by keeping only the most recent logs
       if (logs.length > this.maxLogs) {
-        console.log(`[writeLog] Trimming logs for user ${userId} to ${this.maxLogs} entries`);
-        logs = logs.slice(-this.maxLogs);
+        this.logger.warn(`Log limit exceeded for user ${userId}. Trimming to ${this.maxLogs} entries.`);
+        logs = logs.slice(-this.maxLogs); // Keep only the last maxLogs entries
       }
 
-      // Write back to the log file
+      // Write back to file
       fs.writeFileSync(logFilePath, logs.join("\n"), "utf8");
-      console.log(`[writeLog] Successfully wrote logs for user ${userId}`);
     } catch (error) {
       console.error(
         "[writeLog] Failed to write log entry:",
-        error instanceof Error ? error.message : String(error),
+        error instanceof Error ? error.message : String(error)
       );
       throw new InternalServerErrorException("Failed to write log entry");
     }
@@ -155,20 +158,45 @@ async getLogs(userId: number): Promise<string> {
   async deleteUserLogs(userId: number): Promise<void> {
     try {
       const logFilePath = path.join(this.logsDirectory, `user-${userId}.log`);
-      console.log(`[deleteUserLogs] Log file path for user ${userId}: ${logFilePath}`);
+      
+      this.logger.debug(`Attempting to delete logs at: ${logFilePath}`);
+      
+      // Create logs directory if it doesn't exist
+      if (!fs.existsSync(this.logsDirectory)) {
+        fs.mkdirSync(this.logsDirectory, { recursive: true });
+      }
 
       if (fs.existsSync(logFilePath)) {
-        console.log(`[deleteUserLogs] Truncating logs for user ${userId}`);
-        await this.truncateUserLogs(userId);
+        fs.truncateSync(logFilePath, 0);
+        this.logger.log(`Successfully cleared logs for user ${userId}`);
       } else {
-        console.log(`[deleteUserLogs] No log file found for user ${userId}`);
+        // Create empty file if it doesn't exist
+        fs.writeFileSync(logFilePath, '', { encoding: 'utf8' });
+        this.logger.log(`Created new empty log file for user ${userId}`);
       }
     } catch (error) {
-      console.error(
-        "[deleteUserLogs] Failed to delete log file:",
-        error instanceof Error ? error.message : String(error),
-      );
-      throw new InternalServerErrorException("Failed to delete log file");
+      this.logger.error(`Failed to clear logs for user ${userId}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new InternalServerErrorException("Failed to clear logs");
+    }
+  }
+
+  async truncateExistingLogs(userId: number): Promise<void> {
+    const logFilePath = path.join(this.logsDirectory, `user-${userId}.log`);
+    
+    try {
+      if (fs.existsSync(logFilePath)) {
+        const existingLogs = fs.readFileSync(logFilePath, "utf8")
+          .split("\n")
+          .filter(entry => entry.trim() !== "");
+
+        if (existingLogs.length > this.maxLogs) {
+          const truncatedLogs = existingLogs.slice(-this.maxLogs);
+          fs.writeFileSync(logFilePath, truncatedLogs.join("\n"), "utf8");
+          this.logger.log(`Truncated logs for user ${userId} to ${this.maxLogs} entries`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Failed to truncate logs for user ${userId}:`, error);
     }
   }
 }
